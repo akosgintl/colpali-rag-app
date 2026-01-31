@@ -20,4 +20,4 @@ def create_supabase_client(settings: Settings) -> SupabaseAsyncClient:
 
 
 def create_anthropic_client(settings: Settings) -> AsyncAnthropic:
-    return AsyncAnthropic(api_key=settings.anthropic.api_key)
+    return AsyncAnthropic(api_key=settings.anthropic.anthropic_api_key)

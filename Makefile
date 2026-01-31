@@ -1,6 +1,7 @@
 .PHONY: clean-pycache clean-ruff-cache clean-mypy-cache clean-all \
         lint format imports mypy pretty all dev prod \
-		create_collection
+		create_collection docker_dev docker_dev_detach docker_dev_logs docker_dev_stop \
+		docker_build docker_run docker_logs docker_stop docker_clear_cache
 
 
 include .env
@@ -74,17 +75,36 @@ prod:
 		--port 8000
 
 # ------------------------------------------------------------------------------
-# Docker
+# Docker (Development - with auto-reload)
+# ------------------------------------------------------------------------------
+
+docker_dev:
+	docker compose up --build
+
+docker_dev_detach:
+	docker compose up -d
+
+docker_dev_logs:
+	docker compose logs -f --tail=100
+
+docker_dev_stop:
+	docker compose down
+
+# ------------------------------------------------------------------------------
+# Docker (Production - no auto-reload)
 # ------------------------------------------------------------------------------
 
 docker_build:
 	docker build -t colpali:latest .
 
 docker_run:
-	docker run --rm --name copali_rag --env-file .env -p 8000:8000 -d colpali:latest
+	docker run --rm --name colpali_rag --env-file .env -v colpali_hf_cache:/root/.cache/huggingface -p 8000:8000 -d colpali:latest
 
 docker_logs:
-	docker logs -f --tail=100 copali_rag
+	docker logs -f --tail=100 colpali_rag
 
 docker_stop:
-	docker stop copali_rag
+	docker stop colpali_rag
+
+docker_clear_cache:
+	docker volume rm colpali_hf_cache || true

@@ -1,35 +1,34 @@
 # Base image
 ARG BASE_IMAGE=ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
-# Stage 1: Build the application
-FROM ${BASE_IMAGE} AS builder
+# Stage 1: Install dependencies (cached layer - rarely changes)
+FROM ${BASE_IMAGE} AS deps
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y git
-
-# Install dependencies without installing the project itself
-RUN --mount=type=bind,source=../uv.lock,target=uv.lock \
-    --mount=type=bind,source=../pyproject.toml,target=pyproject.toml \
-    uv sync --frozen --no-install-project --no-cache --no-dev
-
-# Add the entire application source code
-ADD . /app
-
-# Compile bytecode and sync dependencies for production
-RUN touch README.md && uv sync --frozen --no-dev
-
-# Stage 2: Prepare the runtime base image
-FROM python:3.12-slim-bookworm AS runtime-base
-
-# Install poppler-utils for pdf2img
-RUN apt-get update && apt-get install -y poppler-utils && \
+RUN apt-get update && apt-get install -y --no-install-recommends git poppler-utils && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder --chown=app:app /app /app
+# Copy only dependency files first for better caching
+COPY pyproject.toml uv.lock ./
+RUN touch README.md && uv sync --frozen --no-install-project --no-dev --no-cache
+
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Stage 3: Build the API service image
-FROM runtime-base AS api
+# Stage 2: Build the application (includes app code)
+FROM deps AS builder
+COPY src/ ./src/
+COPY server.py prompts/ ./
+RUN uv sync --frozen --no-dev --no-cache
+
+# Stage 3: Runtime image
+FROM builder AS runtime
+
 WORKDIR /app
+COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /app/src /app/src
+COPY --from=builder /app/server.py /app/server.py
+COPY --from=builder /app/prompts /app/prompts
+
+ENV PATH="/app/.venv/bin:$PATH" PYTHONPATH="/app/src"
 CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]

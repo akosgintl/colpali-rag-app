@@ -1,13 +1,14 @@
-import os
 from functools import lru_cache
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class QdrantSettings(BaseSettings):
-    collection_name: str = os.environ.get("QDRANT_COLLECTION_NAME", "")
-    qdrant_url: str = os.environ.get("QDRANT_URL", "")
-    qdrant_api_key: str = os.environ.get("QDRANT_API_KEY", "")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    collection_name: str = ""
+    qdrant_url: str = ""
+    qdrant_api_key: str = ""
 
 
 class ColpaliSettings(BaseSettings):
@@ -15,13 +16,17 @@ class ColpaliSettings(BaseSettings):
 
 
 class SupabaseSettings(BaseSettings):
-    supabase_key: str = os.environ.get("SUPABASE_KEY", "")
-    supabase_url: str = os.environ.get("SUPABASE_URL", "")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    supabase_key: str = ""
+    supabase_url: str = ""
     bucket: str = "colpali"
 
 
 class AnthropicSettings(BaseSettings):
-    api_key: str = os.environ.get("ANTHROPIC_API_KEY", "")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    anthropic_api_key: str = ""
 
 
 class Settings(BaseSettings):

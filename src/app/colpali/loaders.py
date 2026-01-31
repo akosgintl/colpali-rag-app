@@ -29,7 +29,7 @@ class ColQwen2_5Loader:
         model = ColQwen2_5.from_pretrained(
             pretrained_model_name_or_path=self.model_name,
             device_map=self._device,
-            torch_dtype=self._dtype,
+            dtype=self._dtype,
             attn_implementation=self._attn_implementation,
         ).eval()
         return model
