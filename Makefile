@@ -1,7 +1,8 @@
 .PHONY: clean-pycache clean-ruff-cache clean-mypy-cache clean-all \
         lint format imports mypy pretty all dev prod \
 		create_collection docker_dev docker_dev_detach docker_dev_logs docker_dev_stop \
-		docker_build docker_run docker_logs docker_stop docker_clear_cache
+		docker_build docker_run docker_logs docker_stop docker_clear_cache \
+		docker_build_runpod docker_push_runpod
 
 
 include .env
@@ -108,3 +109,14 @@ docker_stop:
 
 docker_clear_cache:
 	docker volume rm colpali_hf_cache || true
+
+# ------------------------------------------------------------------------------
+# Docker (RunPod - GPU optimized with pre-downloaded model)
+# ------------------------------------------------------------------------------
+
+docker_build_runpod:
+	docker build -f Dockerfile.runpod -t colpali-rag-app:runpod .
+
+docker_push_runpod:
+	docker tag colpali-rag-app:runpod $(DOCKERHUB_USERNAME)/colpali-rag-app:latest
+	docker push $(DOCKERHUB_USERNAME)/colpali-rag-app:latest

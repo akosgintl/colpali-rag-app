@@ -1,0 +1,17 @@
+{
+  "name": "ColPali RAG App",
+  "description": "Document retrieval using Vision Language Models (ColQwen2.5)",
+  "dockerImage": "YOUR_DOCKERHUB_USERNAME/colpali-rag-app:latest",
+  "containerDiskSize": 20,
+  "volumeSize": 0,
+  "ports": "8000/http",
+  "env": {
+    "QDRANT_URL": "YOUR_QDRANT_URL",
+    "QDRANT_API_KEY": "YOUR_QDRANT_API_KEY",
+    "COLLECTION_NAME": "colpali",
+    "SUPABASE_URL": "YOUR_SUPABASE_URL",
+    "SUPABASE_KEY": "YOUR_SUPABASE_KEY",
+    "ANTHROPIC_API_KEY": "YOUR_ANTHROPIC_API_KEY"
+  },
+  "readme": "# ColPali RAG App\n\nFastAPI backend for document retrieval using Vision Language Models.\n\n## Endpoints\n- POST /ingest-pdfs/ - Upload and index PDFs\n- POST /query/ - Query indexed documents\n- GET /health - Health check\n\n## GPU Requirements\n- Minimum: 16GB VRAM (RTX 4000, A4000, etc.)\n- Recommended: 24GB VRAM (RTX 4090, A5000, etc.)"
+}

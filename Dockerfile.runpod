@@ -1,0 +1,93 @@
+# RunPod-optimized Dockerfile with CUDA support, Flash Attention 2, and pre-downloaded model
+# Image size: ~12GB (PyTorch + CUDA + flash-attn + ColQwen2.5 model)
+
+ARG CUDA_VERSION=12.4.1
+
+# Stage 1: Dependencies (use devel image for flash-attn compilation)
+FROM nvidia/cuda:${CUDA_VERSION}-devel-ubuntu22.04 AS deps
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
+
+WORKDIR /app
+
+# Install Python 3.12 via deadsnakes PPA, poppler (for pdf2image), build tools, and uv
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa -y \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.12 \
+    python3.12-venv \
+    python3.12-dev \
+    git \
+    poppler-utils \
+    curl \
+    ninja-build \
+    && curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Set Python 3.12 as default
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
+
+ENV PATH="/root/.local/bin:/app/.venv/bin:$PATH"
+
+# Copy dependency files
+COPY pyproject.toml uv.lock ./
+RUN touch README.md && uv sync --frozen --no-install-project --no-dev --no-cache
+
+# Install flash-attn (requires CUDA dev tools, compiled for the installed torch version)
+# Using MAX_JOBS to limit memory usage during compilation
+ENV MAX_JOBS=4
+RUN uv pip install flash-attn --no-build-isolation --no-cache
+
+# Stage 2: Download model weights (cached layer)
+FROM deps AS model-download
+
+# Download ColQwen2.5 model to cache (this is the heavy part ~8GB)
+ENV HF_HOME=/app/model_cache
+RUN python3 -c "from huggingface_hub import snapshot_download; snapshot_download('vidore/colqwen2.5-v0.2')"
+
+# Stage 3: Build application
+FROM deps AS builder
+COPY src/ ./src/
+COPY server.py ./
+COPY prompts ./prompts
+RUN uv sync --frozen --no-dev --no-cache
+
+# Stage 4: Runtime
+FROM nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu22.04 AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV HF_HOME=/app/model_cache
+
+WORKDIR /app
+
+# Install minimal runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa -y \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.12 \
+    poppler-utils \
+    curl \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1 \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Copy from builder stages
+COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /app/src /app/src
+COPY --from=builder /app/server.py /app/server.py
+COPY --from=builder /app/prompts /app/prompts
+COPY --from=model-download /app/model_cache /app/model_cache
+
+ENV PATH="/app/.venv/bin:$PATH" PYTHONPATH="/app/src"
+
+# Expose port (RunPod uses 8000 by default for HTTP)
+EXPOSE 8000
+
+# Health check for RunPod
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]

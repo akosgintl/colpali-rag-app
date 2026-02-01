@@ -8,7 +8,11 @@ wheels/
 
 # Virtual environments
 .venv
-.env
 
-# Folder
-my-ui/
+# Environment files (keep .env.example)
+.env
+!.env.example
+
+my-prompts.md
+TODOs/TODO.md
+TODOs/ColPali.ipynb

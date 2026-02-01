@@ -22,3 +22,9 @@ app.add_middleware(
 
 app.include_router(pdf_ingest.router)
 app.include_router(query.router)
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for container orchestration."""
+    return {"status": "healthy"}

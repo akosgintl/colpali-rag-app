@@ -48,9 +48,9 @@ git clone https://github.com/jjovalle99/colpali-rag-app.git
 cd colpali-rag-app
 ```
 
-2. **Copy the stub `.env copy` file to `.env` and replace placeholder values with the required credentials**:
+2. **Copy the `.env.example` file to `.env` and replace placeholder values with the required credentials**:
 ```shell
-cp .env\ copy .env
+cp .env.example .env
 ```
 ```
 # RAG
@@ -86,7 +86,7 @@ There are two ways to run the application: using Docker or running it locally in
    ```shell
    make docker_build
    ```
-   **Note**: The docker image is about 2.1GB in size.
+   **Note**: The Docker image is about 2.1GB in size. For GPU deployment with pre-downloaded model and Flash Attention 2, use `make docker_build_runpod` (~12GB).
 
 3. **Run the Docker container:**
 
@@ -168,11 +168,47 @@ The application automatically uses [Flash Attention 2](https://github.com/Dao-AI
 
 If WSL2 runs out of memory during compilation or model loading, configure `.wslconfig` to allocate more RAM.
 
+### RunPod Deployment (GPU Cloud)
+
+For production GPU deployment, the app can be deployed to RunPod with pre-downloaded model weights and **Flash Attention 2** pre-compiled for optimal inference performance.
+
+1. **Set up GitHub Secrets** for automated builds:
+   - `DOCKERHUB_USERNAME` - Your Docker Hub username
+   - `DOCKERHUB_TOKEN` - Docker Hub access token
+
+2. **Push to main** - GitHub Actions will automatically build and push the GPU-optimized image:
+   ```shell
+   git push origin main
+   # Image pushed to: your-username/colpali-rag-app:latest
+   ```
+
+3. **Deploy on RunPod**:
+   - Go to RunPod Console → Pods → Deploy
+   - Select GPU with 16GB+ VRAM (RTX 4000 Ada, A4000, RTX 4090, etc.)
+   - Image: `your-dockerhub-username/colpali-rag-app:latest`
+   - HTTP Port: `8000`
+   - Set environment variables (same as `.env`)
+
+4. **Manual build** (if needed):
+   ```shell
+   make docker_build_runpod
+   export DOCKERHUB_USERNAME=your-username
+   make docker_push_runpod
+   ```
+
+See [docs/deployment.md](docs/deployment.md) for detailed instructions.
+
 ## Structure
 ```shell
+├── .env.example
+├── .github
+│   └── workflows
+│       └── docker-build.yml
 ├── Dockerfile
+├── Dockerfile.runpod
 ├── Makefile
 ├── README.md
+├── runpod.template.json
 ├── assets
 ├── prompts
 │   ├── response_1

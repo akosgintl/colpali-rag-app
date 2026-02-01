@@ -14,7 +14,7 @@ ColPali RAG App uses **ColQwen 2.5** to index and retrieve information directly 
 | [API Reference](./api-reference.md) | Detailed API endpoint documentation |
 | [Data Flow](./data-flow.md) | Request lifecycle and data processing |
 | [Configuration](./configuration.md) | Environment variables and settings |
-| [Deployment](./deployment.md) | Local, Docker, and production deployment |
+| [Deployment](./deployment.md) | Local, Docker, RunPod (GPU), and cloud deployment |
 
 ## Module Documentation
 

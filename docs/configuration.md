@@ -352,6 +352,11 @@ ANTHROPIC_API_KEY=sk-ant-api03-...
 # Model Configuration (Optional)
 # ===================
 # COLPALI_MODEL_NAME=vidore/colqwen2.5-v0.2
+
+# ===================
+# Docker Hub (for RunPod deployment)
+# ===================
+# DOCKERHUB_USERNAME=your-dockerhub-username
 ```
 
 ---

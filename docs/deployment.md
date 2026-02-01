@@ -21,7 +21,12 @@ graph TD
         Azure["Azure Container Apps"]
     end
 
+    subgraph GPU["GPU Cloud (Recommended)"]
+        RunPod["RunPod\n(make docker_build_runpod)"]
+    end
+
     Dev --> Container --> Cloud
+    Container --> GPU
 ```
 
 ---
@@ -308,19 +313,117 @@ az containerapp create \
              SUPABASE_KEY=secretref:supabase-key
 ```
 
+### RunPod (GPU)
+
+RunPod provides GPU instances ideal for running the ColQwen2.5 model with CUDA acceleration. The RunPod image includes **Flash Attention 2** pre-compiled for optimal inference performance.
+
+```mermaid
+sequenceDiagram
+    participant Dev as Developer
+    participant GH as GitHub Actions
+    participant DH as Docker Hub
+    participant RP as RunPod
+
+    Dev->>GH: Push to main
+    GH->>GH: Build GPU image
+    GH->>DH: Push image
+    Dev->>RP: Deploy Pod
+    RP->>DH: Pull image
+    RP-->>Dev: Pod URL
+```
+
+#### Prerequisites
+
+1. **Docker Hub Account** - Free tier works (public images)
+2. **RunPod Account** - GPU cloud provider
+3. **GitHub Repository** - For automated builds
+
+#### Setup GitHub Secrets
+
+Add these secrets to your GitHub repository (Settings → Secrets → Actions):
+
+| Secret | Description |
+|--------|-------------|
+| `DOCKERHUB_USERNAME` | Your Docker Hub username |
+| `DOCKERHUB_TOKEN` | Docker Hub access token (create at hub.docker.com → Account Settings → Security) |
+
+#### Automated Build (Recommended)
+
+Push to `main` branch triggers GitHub Actions to build and push:
+
+```bash
+git push origin main
+# Image built and pushed to: your-username/colpali-rag-app:latest
+```
+
+#### Manual Build
+
+```bash
+# Build GPU-optimized image (~12GB with model + Flash Attention 2)
+make docker_build_runpod
+
+# Push to Docker Hub
+export DOCKERHUB_USERNAME=your-username
+docker login
+make docker_push_runpod
+```
+
+#### Deploy on RunPod
+
+1. Go to **RunPod Console** → **Pods** → **Deploy**
+2. Select GPU (minimum 16GB VRAM):
+   - Budget: RTX 4000 Ada, A4000
+   - Recommended: RTX 4090, A5000, A6000
+3. Configure container:
+   - **Image**: `your-dockerhub-username/colpali-rag-app:latest`
+   - **Container Disk**: 20 GB
+   - **HTTP Port**: 8000
+4. Set environment variables:
+   ```
+   QDRANT_URL=https://your-qdrant-instance.cloud.qdrant.io
+   QDRANT_API_KEY=your-qdrant-api-key
+   COLLECTION_NAME=colpali
+   SUPABASE_URL=https://your-project.supabase.co
+   SUPABASE_KEY=your-supabase-key
+   ANTHROPIC_API_KEY=sk-ant-your-key
+   ```
+5. Deploy and access via the provided Pod URL
+
+#### GPU Requirements
+
+| GPU | VRAM | Status |
+|-----|------|--------|
+| RTX 3080 | 10GB | Minimum (may need optimization) |
+| RTX 4000 Ada | 16GB | Works well |
+| RTX 4090 | 24GB | Recommended |
+| A4000 | 16GB | Works well |
+| A5000/A6000 | 24-48GB | Optimal |
+
+#### Cost Estimates
+
+| Component | Cost |
+|-----------|------|
+| GitHub Actions | Free (2,000 min/month) |
+| Docker Hub | Free (public repos) |
+| RunPod (16GB GPU) | ~$0.20-0.40/hour |
+| RunPod (24GB GPU) | ~$0.40-0.80/hour |
+
 ---
 
 ## Production Considerations
 
 ### Health Checks
 
-Add a health endpoint for load balancer probes:
+The application includes a `/health` endpoint for load balancer probes:
 
 ```python
 @app.get("/health")
-async def health():
+async def health_check():
+    """Health check endpoint for container orchestration."""
     return {"status": "healthy"}
 ```
+
+This endpoint is used by Docker health checks and container orchestrators (Kubernetes, RunPod, etc.).
 
 ### Scaling
 

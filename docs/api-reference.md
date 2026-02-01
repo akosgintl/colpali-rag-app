@@ -14,6 +14,7 @@ http://localhost:8000
 |----------|--------|-------------|
 | `/ingest-pdfs/` | POST | Ingest PDF documents |
 | `/query/` | POST | Query ingested documents |
+| `/health` | GET | Health check for container orchestration |
 | `/docs` | GET | Interactive API documentation |
 | `/openapi.json` | GET | OpenAPI schema |
 
@@ -279,6 +280,30 @@ async def query_documents(session_id: str, query: str):
 
 asyncio.run(ingest_pdfs())
 ```
+
+---
+
+## GET /health
+
+Health check endpoint for container orchestration and load balancers.
+
+### Request
+
+```bash
+curl http://localhost:8000/health
+```
+
+### Response
+
+**Content-Type:** `application/json`
+
+```json
+{
+  "status": "healthy"
+}
+```
+
+This endpoint is used by Docker health checks, Kubernetes probes, and RunPod to verify the application is running.
 
 ---
 

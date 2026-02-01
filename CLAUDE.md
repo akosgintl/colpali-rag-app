@@ -29,6 +29,12 @@ make docker_run             # Run container (requires .env)
 make docker_dev             # Run with docker-compose (hot-reload)
 ```
 
+### RunPod (GPU Cloud)
+```bash
+make docker_build_runpod    # Build GPU image with CUDA + Flash Attention 2 + pre-downloaded model (~12GB)
+make docker_push_runpod     # Push to Docker Hub (requires DOCKERHUB_USERNAME env var)
+```
+
 ## Architecture
 
 ### Request Flow
