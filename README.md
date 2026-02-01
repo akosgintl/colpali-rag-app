@@ -7,11 +7,6 @@
     <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json" alt="Ruff" style="max-width:100%;"></a>
 </div>
 
-## UI prototype
-The UI prototype can be found [here](http://129.146.104.226:3000/)
-
-*Note:* The UI will be available for limited time since I need to pay for the hosting.
-
 ## Context
 ColPali is a document retrieval method that leverages Vision Language Models (VLMs) to index and retrieve information directly from document images, bypassing traditional text extraction methods. By processing entire document pages as images, ColPali captures both textual content and visual elements—such as tables, figures, and layouts—thereby preserving the document's original structure and context.
 
@@ -24,10 +19,12 @@ This repository contains the backend for a retrieval augmented generation (RAG) 
 
 ### Ingestion
 During the ingestion process, the application converts PDFs into JPEGs using the Python **pdf2image** library. These images are then uploaded to Supabase storage and indexed using Qdrant. To extract embeddings from the images, the application utilizes ColQwen 2.5.
+
 ![ingestion](assets/ingestion.png)
 
 ### Inference
 At inference time, the application queries the Qdrant collection using the ColQwen 2.5 embeddings of the query. It returns the top-k results (images) from the collection. Note that Qdrant stores references to the images, not the images themselves. The application fetches these images from Supabase and uses them with a multimodal model (Claude Sonnet 3.7) to generate the response.
+
 ![inference](assets/inference.png)
 
 
@@ -133,6 +130,43 @@ uv sync --all-groups
 5. **Access the application and database.** Visit the default app path at [http://localhost:8000](http://localhost:8000). If everything is working correctly, you'll see the UI.
 
 6. **Stop the application and background services.** Terminate the processes you (this may involve using `Ctrl+C` in the terminal)
+
+### Flash Attention 2 (Optional)
+
+The application automatically uses [Flash Attention 2](https://github.com/Dao-AILab/flash-attention) when available, which significantly speeds up the ColQwen2.5 model inference. If Flash Attention 2 is not installed, the application falls back to standard attention.
+
+**Requirements:**
+- Linux (native or WSL2)
+- NVIDIA GPU with compute capability >= 7.5 (RTX 20xx series or newer)
+- CUDA 11.6+
+
+**Note for Windows users:** Flash Attention 2 is not supported on native Windows. To use it, run the application inside WSL2.
+
+#### Installing on WSL2
+
+1. **Verify GPU access in WSL2:**
+   ```shell
+   nvidia-smi
+   ```
+
+2. **Install build dependencies:**
+   ```shell
+   sudo apt install build-essential
+   ```
+
+3. **Install Flash Attention 2:**
+   ```shell
+   pip install flash-attn --no-build-isolation
+   ```
+   Note: Compilation takes 10-20 minutes.
+
+4. **Verify installation:**
+   ```python
+   from transformers.utils.import_utils import is_flash_attn_2_available
+   print(is_flash_attn_2_available())  # Should print True
+   ```
+
+If WSL2 runs out of memory during compilation or model loading, configure `.wslconfig` to allocate more RAM.
 
 ## Structure
 ```shell
