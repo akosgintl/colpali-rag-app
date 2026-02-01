@@ -25,8 +25,10 @@ class FinalResponse(BaseModel):
     )
     
     @field_serializer('references')
-    def serialize_references(self, refs: list[Reference | dict[str, Any]], _info) -> list[dict[str, Any]]:
+    def serialize_references(self, refs: list[Reference | dict[str, Any]] | None, _info) -> list[dict[str, Any]]:
         """Serialize references, handling both complete Reference objects and partial dicts during streaming."""
+        if refs is None:
+            return []
         result = []
         for ref in refs:
             if isinstance(ref, Reference):
