@@ -40,12 +40,12 @@ Utility functions for reading prompt files.
 Reads prompt content from a plain text file.
 
 ```python
-def read_prompt_from_plain_file(file_path: Path) -> str:
+def read_prompt_from_plain_file(filename: str) -> str:
     """
     Read prompt content from a plain text file.
 
     Args:
-        file_path: Path to the prompt file
+        filename: Path to the prompt file as string
 
     Returns:
         File contents as string
@@ -53,14 +53,14 @@ def read_prompt_from_plain_file(file_path: Path) -> str:
     Raises:
         FileNotFoundError: If file doesn't exist
     """
-    if not file_path.exists():
-        logger.error(f"Prompt file not found: {file_path}")
-        raise FileNotFoundError(f"Prompt file not found: {file_path}")
-
-    content = file_path.read_text(encoding="utf-8")
-    logger.info(f"Loaded prompt from {file_path} ({len(content)} chars)")
-
-    return content
+    filepath = Path(filename)
+    try:
+        with filepath.open(mode="r") as prompt:
+            content = prompt.read()
+            return content
+    except FileNotFoundError:
+        logger.error("Prompt file not found | path={}", filepath)
+        raise
 ```
 
 ### Usage Flow
@@ -73,17 +73,17 @@ sequenceDiagram
     participant Logger as Loguru
 
     Note over Deps: Called once (cached)
-    Deps->>Utils: read_prompt_from_plain_file(path)
+    Deps->>Utils: read_prompt_from_plain_file(filename)
 
-    Utils->>FS: file_path.exists()
+    Utils->>FS: filepath.open(mode="r")
     alt File exists
-        FS-->>Utils: True
-        Utils->>FS: file_path.read_text()
+        FS-->>Utils: file handle
+        Utils->>FS: prompt.read()
         FS-->>Utils: content
-        Utils->>Logger: info("Loaded prompt...")
+        Utils->>Logger: info("Prompt loaded...")
         Utils-->>Deps: content
     else File not found
-        FS-->>Utils: False
+        FS-->>Utils: FileNotFoundError
         Utils->>Logger: error("Prompt file not found...")
         Utils-->>Deps: raise FileNotFoundError
     end
@@ -99,12 +99,10 @@ sequenceDiagram
 ### Example
 
 ```python
-from pathlib import Path
 from src.app.utils.prompt_utils import read_prompt_from_plain_file
 
 # Load a prompt
-prompt_path = Path("prompts/response_1")
-system_prompt = read_prompt_from_plain_file(prompt_path)
+system_prompt = read_prompt_from_plain_file("prompts/response_1")
 ```
 
 ---
@@ -112,6 +110,45 @@ system_prompt = read_prompt_from_plain_file(prompt_path)
 ## qdrant_utils.py
 
 Utility functions for Qdrant operations with retry logic.
+
+### ensure_collection_exists
+
+Ensures the Qdrant collection exists, creating it if necessary.
+
+```python
+async def ensure_collection_exists(
+    qdrant_client: AsyncQdrantClient,
+    collection_name: str,
+) -> None:
+    """Ensure the collection exists, create it if it doesn't."""
+    collections_response = await qdrant_client.get_collections()
+    collections = [
+        collection.name for collection in collections_response.collections
+    ]
+
+    if collection_name not in collections:
+        await qdrant_client.create_collection(
+            collection_name=collection_name,
+            vectors_config=models.VectorParams(
+                size=128,
+                distance=models.Distance.COSINE,
+                multivector_config=models.MultiVectorConfig(
+                    comparator=models.MultiVectorComparator.MAX_SIM
+                ),
+                on_disk=False,
+            ),
+            on_disk_payload=False,
+        )
+
+        # Create index on session_id for faster filtering
+        await qdrant_client.create_payload_index(
+            collection_name=collection_name,
+            field_name="session_id",
+            field_schema=models.PayloadSchemaType.KEYWORD,
+        )
+```
+
+---
 
 ### upsert_with_retry
 
@@ -140,30 +177,42 @@ graph TD
 ### Implementation
 
 ```python
-from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
+from tenacity import (
+    before_sleep_log,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 @retry(
+    retry=retry_if_exception_type(Exception),
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=1, max=10),
+    reraise=True,
     before_sleep=before_sleep_log(logger, logging.WARNING),
 )
 async def upsert_with_retry(
-    client: AsyncQdrantClient,
+    qdrant_client: AsyncQdrantClient,
     collection_name: str,
-    points: list[PointStruct],
+    points: list[models.PointStruct],
 ) -> None:
     """
     Upsert points to Qdrant with retry logic.
 
     Args:
-        client: Async Qdrant client
+        qdrant_client: Async Qdrant client
         collection_name: Name of the collection
         points: List of points to upsert
 
     Raises:
         Exception: After 3 failed attempts
     """
-    await client.upsert(
+    # Ensure collection exists before upserting
+    await ensure_collection_exists(qdrant_client, collection_name)
+
+    # Now perform the upsert
+    await qdrant_client.upsert(
         collection_name=collection_name,
         points=points,
         wait=True,
@@ -268,16 +317,13 @@ Both utilities use Loguru for logging:
 
 ```python
 from functools import lru_cache
-from pathlib import Path
 from src.app.utils.prompt_utils import read_prompt_from_plain_file
 
-@lru_cache
-def get_prompts() -> dict[str, str]:
-    prompts_path = Path("prompts")
-    return {
-        "prompt_1": read_prompt_from_plain_file(prompts_path / "response_1"),
-        "prompt_2": read_prompt_from_plain_file(prompts_path / "response_2"),
-    }
+@lru_cache(maxsize=1)
+def get_prompts():
+    prompt1 = read_prompt_from_plain_file("prompts/response_1")
+    prompt2 = read_prompt_from_plain_file("prompts/response_2")
+    return {"prompt1": prompt1, "prompt2": prompt2}
 ```
 
 ### In pdf_ingest.py

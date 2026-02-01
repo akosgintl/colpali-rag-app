@@ -8,23 +8,47 @@ from supabase.client import AsyncClient as SupabaseAsyncClient
 
 
 class SupabaseJPEGDownloader:
-    def __init__(self, client: SupabaseAsyncClient, bucket_name: str):
+    def __init__(
+        self, client: SupabaseAsyncClient, bucket_name: str, timeout_seconds: int = 120
+    ):
         self.client = client
         self.bucket_name = bucket_name
-        logger.debug("SupabaseJPEGDownloader initialized | bucket={}", bucket_name)
+        self.timeout_seconds = timeout_seconds
+        logger.info(
+            "SupabaseJPEGDownloader initialized | bucket={} | timeout={}s",
+            bucket_name,
+            timeout_seconds,
+        )
 
     async def download_image(self, filename: str) -> bytes:
-        logger.debug("Downloading image | filename={}", filename)
+        logger.info("Downloading image | filename={}", filename)
         try:
-            data = await self.client.storage.from_(id=self.bucket_name).download(
-                path=filename
+            # Wrap download with timeout
+            data = await asyncio.wait_for(
+                self.client.storage.from_(id=self.bucket_name).download(
+                    path=filename
+                ),
+                timeout=self.timeout_seconds,
             )
-            logger.debug(
-                "Image downloaded | filename={} | size_bytes={}", filename, len(data)
+            logger.info(
+                "Image downloaded | filename={} | size_bytes={}",
+                filename,
+                len(data),
             )
             return data
+        except asyncio.TimeoutError:
+            logger.error(
+                "Download timeout | filename={} | timeout_seconds={}",
+                filename,
+                self.timeout_seconds,
+            )
+            raise
         except Exception as e:
-            logger.error("Failed to download image | filename={} | error={}", filename, str(e))
+            logger.error(
+                "Failed to download image | filename={} | error={}",
+                filename,
+                str(e),
+            )
             raise
 
     async def download_images(self, paths: list[str]) -> list[bytes]:
@@ -33,13 +57,19 @@ class SupabaseJPEGDownloader:
         tasks = [self.download_image(path) for path in paths]
         results = await asyncio.gather(*tasks)
         elapsed = time.perf_counter() - start_time
-        logger.info("Downloaded {} images | time_ms={:.2f}", len(results), elapsed * 1000)
+        logger.info(
+            "Downloaded {} images | time_ms={:.2f}",
+            len(results),
+            elapsed * 1000,
+        )
         return results
 
     async def download_instructor_images(
         self, filenames: list[str]
     ) -> list[instructor.Image]:
-        logger.debug("Converting {} images to instructor format", len(filenames))
+        logger.info(
+            "Converting {} images to instructor format", len(filenames)
+        )
         images_bytes = await self.download_images(paths=filenames)
         return bytes_list_to_instructor_images(images_bytes=images_bytes)
 

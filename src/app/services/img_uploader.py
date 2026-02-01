@@ -9,28 +9,50 @@ from supabase.client import AsyncClient as SupabaseAsyncClient
 
 
 class SupabaseJPEGUploader:
-    def __init__(self, client: SupabaseAsyncClient, bucket_name: str):
+    def __init__(
+        self, client: SupabaseAsyncClient, bucket_name: str, timeout_seconds: int = 120
+    ):
         self.client = client
         self.bucket_name = bucket_name
-        logger.debug("SupabaseJPEGUploader initialized | bucket={}", bucket_name)
+        self.timeout_seconds = timeout_seconds
+        logger.info(
+            "SupabaseJPEGUploader initialized | bucket={} | timeout={}s",
+            bucket_name,
+            timeout_seconds,
+        )
 
     async def _upload_image(
         self, session_id: UUID4, file_name: str, page: int, image: Image.Image
     ):
         path = f"{session_id}/{file_name}/{page}.jpeg"
-        logger.debug("Uploading image | path={}", path)
+        logger.info("Uploading image | path={}", path)
         try:
             with BytesIO() as buffer:
                 image.save(buffer, format="JPEG")
                 data = buffer.getvalue()
-                await self.client.storage.from_(id=self.bucket_name).upload(
-                    path=path,
-                    file=data,
-                    file_options={"content-type": "image/jpeg"},
+                # Wrap upload with timeout
+                await asyncio.wait_for(
+                    self.client.storage.from_(id=self.bucket_name).upload(
+                        path=path,
+                        file=data,
+                        file_options={"content-type": "image/jpeg"},
+                    ),
+                    timeout=self.timeout_seconds,
                 )
-            logger.debug("Image uploaded | path={} | size_bytes={}", path, len(data))
+            logger.info(
+                "Image uploaded | path={} | size_bytes={}", path, len(data)
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                "Upload timeout | path={} | timeout_seconds={}",
+                path,
+                self.timeout_seconds,
+            )
+            raise
         except Exception as e:
-            logger.error("Failed to upload image | path={} | error={}", path, str(e))
+            logger.error(
+                "Failed to upload image | path={} | error={}", path, str(e)
+            )
             raise
 
     async def upload_images(

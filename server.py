@@ -1,19 +1,37 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 from app.api.endpoints import pdf_ingest, query
 from app.api.lifespan import lifespan
+from app.api.middleware import TimeoutMiddleware
+from app.api.rate_limit import limiter
 from app.logging_config import configure_logging
+from app.settings import get_settings
 
 configure_logging()
 logger.info("Starting colpali-rag-app server")
 
+settings = get_settings()
+
 app = FastAPI(lifespan=lifespan)
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+app.add_middleware(
+    TimeoutMiddleware,
+    endpoint_timeouts={
+        "/ingest-pdfs/": settings.timeout.ingest_endpoint_timeout_seconds,
+        "/query/": settings.timeout.query_endpoint_timeout_seconds,
+    },
+)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.auth.allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

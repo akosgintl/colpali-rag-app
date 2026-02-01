@@ -70,10 +70,12 @@ dev:
 		--reload
 
 # Run the server in production mode without reloading.
+# Note: For GPU workloads, stick to 1 worker per GPU since each worker loads its own model copy (~8GB).
 prod:
 	uv run uvicorn server:app \
 		--host 0.0.0.0 \
-		--port 8000
+		--port 8000 \
+		--workers 1
 
 # ------------------------------------------------------------------------------
 # Docker (Development - with auto-reload)

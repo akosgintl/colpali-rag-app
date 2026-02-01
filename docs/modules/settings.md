@@ -24,6 +24,11 @@ graph TD
         SS["SupabaseSettings"]
         AS["AnthropicSettings"]
         CS["ColpaliSettings"]
+        PS["ProcessingSettings"]
+        TS["TimeoutSettings"]
+        RLS["RateLimitSettings"]
+        AUTH["AuthSettings"]
+        SRV["ServerSettings"]
     end
 
     subgraph Root["Root Settings"]
@@ -38,14 +43,29 @@ graph TD
     ENV --> QS
     ENV --> SS
     ENV --> AS
-    SYS --> CS
+    ENV --> CS
+    ENV --> PS
+    ENV --> TS
+    ENV --> RLS
+    ENV --> AUTH
+    ENV --> SRV
     DEFAULT --> CS
     DEFAULT --> SS
+    DEFAULT --> PS
+    DEFAULT --> TS
+    DEFAULT --> RLS
+    DEFAULT --> AUTH
+    DEFAULT --> SRV
 
     QS --> RS
     SS --> RS
     AS --> RS
     CS --> RS
+    PS --> RS
+    TS --> RS
+    RLS --> RS
+    AUTH --> RS
+    SRV --> RS
 
     RS --> LRU --> GET
 ```
@@ -60,21 +80,18 @@ Configuration for Qdrant vector database.
 
 ```python
 class QdrantSettings(BaseSettings):
-    collection_name: str
-    qdrant_url: str
-    qdrant_api_key: SecretStr
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        extra="ignore",
-    )
+    collection_name: str = ""
+    qdrant_url: str = ""
+    qdrant_api_key: str = ""
 ```
 
 | Variable | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
 | `COLLECTION_NAME` | `str` | Yes | - | Qdrant collection name |
 | `QDRANT_URL` | `str` | Yes | - | Qdrant instance URL |
-| `QDRANT_API_KEY` | `SecretStr` | Yes | - | API key (masked in logs) |
+| `QDRANT_API_KEY` | `str` | Yes | - | Qdrant API key |
 
 ---
 
@@ -84,20 +101,19 @@ Configuration for Supabase storage.
 
 ```python
 class SupabaseSettings(BaseSettings):
-    supabase_key: SecretStr
-    supabase_url: str
-    bucket: str = "colpali"
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        extra="ignore",
-    )
+    supabase_key: str = ""
+    supabase_url: str = ""
+    supabase_jwt_secret: str = ""
+    bucket: str = "colpali"
 ```
 
 | Variable | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
-| `SUPABASE_KEY` | `SecretStr` | Yes | - | Supabase API key |
+| `SUPABASE_KEY` | `str` | Yes | - | Supabase API key |
 | `SUPABASE_URL` | `str` | Yes | - | Supabase project URL |
+| `SUPABASE_JWT_SECRET` | `str` | No* | - | JWT secret (*required if AUTH_ENABLED=true) |
 | `BUCKET` | `str` | No | `colpali` | Storage bucket name |
 
 ---
@@ -108,17 +124,20 @@ Configuration for Anthropic API.
 
 ```python
 class AnthropicSettings(BaseSettings):
-    anthropic_api_key: SecretStr
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        extra="ignore",
-    )
+    anthropic_api_key: str = ""
+    default_model: str = "claude-sonnet-4-20250514"
+    max_tokens: int = 8192
+    temperature: float = 0.0
 ```
 
 | Variable | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
-| `ANTHROPIC_API_KEY` | `SecretStr` | Yes | - | Anthropic API key |
+| `ANTHROPIC_API_KEY` | `str` | Yes | - | Anthropic API key |
+| `DEFAULT_MODEL` | `str` | No | `claude-sonnet-4-20250514` | Claude model ID |
+| `MAX_TOKENS` | `int` | No | `8192` | Maximum response tokens |
+| `TEMPERATURE` | `float` | No | `0.0` | Model temperature |
 
 ---
 
@@ -128,14 +147,16 @@ Configuration for ColQwen model.
 
 ```python
 class ColpaliSettings(BaseSettings):
-    colpali_model_name: str = "vidore/colqwen2.5-v0.2"
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    model_config = SettingsConfigDict(extra="ignore")
+    colpali_model_name: str = "vidore/colqwen2.5-v0.2"
+    max_concurrent_inferences: int = 1
 ```
 
 | Variable | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
 | `COLPALI_MODEL_NAME` | `str` | No | `vidore/colqwen2.5-v0.2` | HuggingFace model ID |
+| `MAX_CONCURRENT_INFERENCES` | `int` | No | `1` | Max concurrent model inferences |
 
 ---
 
@@ -145,12 +166,15 @@ Aggregates all settings classes.
 
 ```python
 class Settings(BaseSettings):
-    qdrant: QdrantSettings = Field(default_factory=QdrantSettings)
-    supabase: SupabaseSettings = Field(default_factory=SupabaseSettings)
-    anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)
-    colpali: ColpaliSettings = Field(default_factory=ColpaliSettings)
-
-    model_config = SettingsConfigDict(extra="ignore")
+    qdrant: QdrantSettings = QdrantSettings()
+    colpali: ColpaliSettings = ColpaliSettings()
+    supabase: SupabaseSettings = SupabaseSettings()
+    anthropic: AnthropicSettings = AnthropicSettings()
+    processing: ProcessingSettings = ProcessingSettings()
+    timeout: TimeoutSettings = TimeoutSettings()
+    rate_limit: RateLimitSettings = RateLimitSettings()
+    auth: AuthSettings = AuthSettings()
+    server: ServerSettings = ServerSettings()
 ```
 
 ---
@@ -177,23 +201,62 @@ classDiagram
     }
 
     class QdrantSettings {
-        +collection_name: str
-        +qdrant_url: str
-        +qdrant_api_key: SecretStr
+        +collection_name: str = ""
+        +qdrant_url: str = ""
+        +qdrant_api_key: str = ""
     }
 
     class SupabaseSettings {
-        +supabase_key: SecretStr
-        +supabase_url: str
+        +supabase_key: str = ""
+        +supabase_url: str = ""
+        +supabase_jwt_secret: str = ""
         +bucket: str = "colpali"
     }
 
     class AnthropicSettings {
-        +anthropic_api_key: SecretStr
+        +anthropic_api_key: str = ""
+        +default_model: str = "claude-sonnet-4-20250514"
+        +max_tokens: int = 8192
+        +temperature: float = 0.0
     }
 
     class ColpaliSettings {
-        +colpali_model_name: str = "vidore/..."
+        +colpali_model_name: str = "vidore/colqwen2.5-v0.2"
+        +max_concurrent_inferences: int = 1
+    }
+
+    class ProcessingSettings {
+        +max_file_size_mb: int
+        +max_total_upload_mb: int
+        +max_pages_per_batch: int
+        +max_pdf_pages: int
+        +clear_cuda_cache_interval: int
+    }
+
+    class TimeoutSettings {
+        +ingest_endpoint_timeout_seconds: int
+        +query_endpoint_timeout_seconds: int
+        +qdrant_timeout_seconds: int
+        +supabase_timeout_seconds: int
+        +anthropic_timeout_seconds: int
+        +pdf_conversion_timeout_seconds: int
+        +colpali_inference_timeout_seconds: int
+    }
+
+    class RateLimitSettings {
+        +query_rate_limit: str
+        +ingest_rate_limit: str
+    }
+
+    class AuthSettings {
+        +auth_enabled: bool
+        +allowed_origins: list
+    }
+
+    class ServerSettings {
+        +workers: int
+        +host: str
+        +port: int
     }
 
     class Settings {
@@ -201,18 +264,33 @@ classDiagram
         +supabase: SupabaseSettings
         +anthropic: AnthropicSettings
         +colpali: ColpaliSettings
+        +processing: ProcessingSettings
+        +timeout: TimeoutSettings
+        +rate_limit: RateLimitSettings
+        +auth: AuthSettings
+        +server: ServerSettings
     }
 
     BaseSettings <|-- QdrantSettings
     BaseSettings <|-- SupabaseSettings
     BaseSettings <|-- AnthropicSettings
     BaseSettings <|-- ColpaliSettings
+    BaseSettings <|-- ProcessingSettings
+    BaseSettings <|-- TimeoutSettings
+    BaseSettings <|-- RateLimitSettings
+    BaseSettings <|-- AuthSettings
+    BaseSettings <|-- ServerSettings
     BaseSettings <|-- Settings
 
     Settings *-- QdrantSettings
     Settings *-- SupabaseSettings
     Settings *-- AnthropicSettings
     Settings *-- ColpaliSettings
+    Settings *-- ProcessingSettings
+    Settings *-- TimeoutSettings
+    Settings *-- RateLimitSettings
+    Settings *-- AuthSettings
+    Settings *-- ServerSettings
 ```
 
 ---
@@ -258,20 +336,18 @@ sequenceDiagram
 
 ---
 
-## SecretStr Usage
+## API Key Handling
 
-`SecretStr` masks sensitive values in logs and string representations:
+API keys are stored as plain strings for simplicity. Ensure your `.env` file is not committed to version control:
 
 ```python
 settings = get_settings()
 
-# Masked in repr
-print(settings.qdrant.qdrant_api_key)
-# Output: SecretStr('**********')
-
-# Access actual value
-api_key = settings.qdrant.qdrant_api_key.get_secret_value()
+# Access API key directly
+api_key = settings.qdrant.qdrant_api_key
 ```
+
+**Security Note:** In production, consider using environment variables or a secrets manager rather than `.env` files.
 
 ---
 
@@ -295,12 +371,13 @@ async def lifespan(app: FastAPI):
 ### In state.py
 
 ```python
-from src.app.settings import QdrantSettings
+from src.app.settings import Settings
 
-def create_qdrant_client(settings: QdrantSettings) -> AsyncQdrantClient:
+def create_qdrant_client(settings: Settings) -> AsyncQdrantClient:
     return AsyncQdrantClient(
-        url=settings.qdrant_url,
-        api_key=settings.qdrant_api_key.get_secret_value(),
+        url=settings.qdrant.qdrant_url,
+        api_key=settings.qdrant.qdrant_api_key,
+        timeout=settings.timeout.qdrant_timeout_seconds,
     )
 ```
 
@@ -319,13 +396,41 @@ QDRANT_API_KEY=your-qdrant-api-key
 # Supabase
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_KEY=your-supabase-key
+SUPABASE_JWT_SECRET=your-jwt-secret  # Required if AUTH_ENABLED=true
 # BUCKET=colpali  # Optional
 
 # Anthropic
 ANTHROPIC_API_KEY=sk-ant-api03-...
+# DEFAULT_MODEL=claude-sonnet-4-20250514
+# MAX_TOKENS=8192
+# TEMPERATURE=0.0
+# MAX_TOKENS=8192
+# TEMPERATURE=0.0
 
 # ColPali (Optional)
 # COLPALI_MODEL_NAME=vidore/colqwen2.5-v0.2
+# MAX_CONCURRENT_INFERENCES=1
+
+# Processing (Optional)
+# MAX_FILE_SIZE_MB=50
+# MAX_PDF_PAGES=200
+
+# Rate Limiting (Optional)
+# QUERY_RATE_LIMIT=30/minute
+# INGEST_RATE_LIMIT=10/minute
+
+# Timeouts (Optional)
+# INGEST_ENDPOINT_TIMEOUT_SECONDS=600
+# QUERY_ENDPOINT_TIMEOUT_SECONDS=180
+# QDRANT_TIMEOUT_SECONDS=60
+# SUPABASE_TIMEOUT_SECONDS=120
+# ANTHROPIC_TIMEOUT_SECONDS=180
+# PDF_CONVERSION_TIMEOUT_SECONDS=120
+# COLPALI_INFERENCE_TIMEOUT_SECONDS=60
+
+# Authentication (Optional)
+# AUTH_ENABLED=true
+# ALLOWED_ORIGINS=["https://yourapp.com"]
 ```
 
 ---

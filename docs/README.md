@@ -48,7 +48,7 @@ block-beta
     block:storage:3
         D["Qdrant\n(Vectors)"]
         E["Supabase\n(Images)"]
-        F["Claude Sonnet\n(LLM)"]
+        F["Claude Sonnet 4\n(LLM)"]
     end
 
     A --> B
@@ -66,14 +66,14 @@ block-beta
 | **ColQwen 2.5** | Vision-language model for embeddings |
 | **Qdrant** | Vector database for similarity search |
 | **Supabase** | Cloud storage for document images |
-| **Claude Sonnet 3.7** | LLM for response generation |
+| **Claude Sonnet 4** | LLM for response generation |
 | **Instructor** | Structured output validation |
 
 ## Getting Started
 
 ### Prerequisites
 
-- Python 3.11+
+- Python 3.12+
 - [uv](https://github.com/astral-sh/uv) package manager
 - Poppler (for PDF conversion)
 - Access to Qdrant, Supabase, and Anthropic APIs

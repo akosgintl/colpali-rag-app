@@ -7,9 +7,12 @@ The API module contains the FastAPI application setup, endpoints, lifecycle mana
 ```
 src/app/api/
 ├── __init__.py
+├── auth.py           # JWT authentication
 ├── state.py          # Client factory functions
 ├── lifespan.py       # Application lifecycle manager
 ├── dependencies.py   # FastAPI dependency injection
+├── middleware.py     # Timeout middleware
+├── rate_limit.py     # Rate limiting setup
 └── endpoints/
     ├── __init__.py
     ├── pdf_ingest.py # PDF ingestion endpoint
@@ -54,57 +57,72 @@ Factory functions for creating async clients.
 
 ### Functions
 
-#### `create_qdrant_client(settings: QdrantSettings) -> AsyncQdrantClient`
+#### `create_qdrant_client(settings: Settings) -> AsyncQdrantClient`
 
-Creates an async Qdrant client.
+Creates an async Qdrant client with connection pool configuration.
 
 ```python
-def create_qdrant_client(settings: QdrantSettings) -> AsyncQdrantClient:
+def create_qdrant_client(settings: Settings) -> AsyncQdrantClient:
+    # Configure httpx limits for connection pooling
+    limits = httpx.Limits(
+        max_connections=20,
+        max_keepalive_connections=10,
+    )
+
     return AsyncQdrantClient(
-        url=settings.qdrant_url,
-        api_key=settings.qdrant_api_key.get_secret_value(),
+        url=settings.qdrant.qdrant_url,
+        api_key=settings.qdrant.qdrant_api_key,
+        timeout=settings.timeout.qdrant_timeout_seconds,
+        limits=limits,
     )
 ```
 
 **Parameters:**
-- `settings`: QdrantSettings with URL and API key
+- `settings`: Root Settings object
 
 **Returns:** AsyncQdrantClient instance
 
 ---
 
-#### `create_supabase_client(settings: SupabaseSettings) -> AsyncClient`
+#### `create_supabase_client(settings: Settings) -> SupabaseAsyncClient`
 
-Creates an async Supabase client.
+Creates a Supabase async client.
 
 ```python
-async def create_supabase_client(settings: SupabaseSettings) -> AsyncClient:
-    return await create_client(
-        settings.supabase_url,
-        settings.supabase_key.get_secret_value(),
+def create_supabase_client(settings: Settings) -> SupabaseAsyncClient:
+    return SupabaseAsyncClient(
+        supabase_key=settings.supabase.supabase_key,
+        supabase_url=settings.supabase.supabase_url,
     )
 ```
 
 **Parameters:**
-- `settings`: SupabaseSettings with URL and key
+- `settings`: Root Settings object
 
 **Returns:** Supabase AsyncClient instance
 
 ---
 
-#### `create_anthropic_client(settings: AnthropicSettings) -> AsyncAnthropic`
+#### `create_anthropic_client(settings: Settings) -> AsyncAnthropic`
 
-Creates an async Anthropic client.
+Creates an async Anthropic client with timeout configuration.
 
 ```python
-def create_anthropic_client(settings: AnthropicSettings) -> AsyncAnthropic:
+def create_anthropic_client(settings: Settings) -> AsyncAnthropic:
+    # Configure httpx client with timeout
+    http_client = httpx.AsyncClient(
+        timeout=httpx.Timeout(float(settings.timeout.anthropic_timeout_seconds)),
+        limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+    )
+
     return AsyncAnthropic(
-        api_key=settings.anthropic_api_key.get_secret_value()
+        api_key=settings.anthropic.anthropic_api_key,
+        http_client=http_client,
     )
 ```
 
 **Parameters:**
-- `settings`: AnthropicSettings with API key
+- `settings`: Root Settings object
 
 **Returns:** AsyncAnthropic instance
 
@@ -125,6 +143,10 @@ class State(TypedDict):
     instructor_client: AsyncInstructor
     qdrant_client: AsyncQdrantClient
     collection_name: str
+    model_semaphore: asyncio.Semaphore   # Concurrency control for GPU
+    qdrant_semaphore: asyncio.Semaphore  # Concurrency control for Qdrant
+    llm_config: dict[str, Any]           # LLM configuration
+    settings: Settings                    # Application settings
 ```
 
 ### Lifecycle Flow
@@ -246,6 +268,11 @@ async def get_qdrant_client(request: Request) -> AsyncQdrantClient:
 | `get_supabase_downloader` | `SupabaseJPEGDownloader` | `request.state.supabase_downloader` |
 | `get_collection_name` | `str` | `request.state.collection_name` |
 | `get_instructor_client` | `AsyncInstructor` | `request.state.instructor_client` |
+| `get_model_semaphore` | `asyncio.Semaphore` | `request.state.model_semaphore` |
+| `get_qdrant_semaphore` | `asyncio.Semaphore` | `request.state.qdrant_semaphore` |
+| `get_llm_config` | `dict[str, Any]` | `request.state.llm_config` |
+| `get_settings_from_state` | `Settings` | `request.state.settings` |
+| `get_current_user` | `dict \| None` | JWT token validation |
 
 ### Cached Dependency
 
@@ -254,16 +281,15 @@ async def get_qdrant_client(request: Request) -> AsyncQdrantClient:
 Loads prompts from files (cached with `@lru_cache`).
 
 ```python
-@lru_cache
-def get_prompts() -> dict[str, str]:
-    prompts_path = Path("prompts")
-    return {
-        "prompt_1": read_prompt_from_plain_file(prompts_path / "response_1"),
-        "prompt_2": read_prompt_from_plain_file(prompts_path / "response_2"),
-    }
+@lru_cache(maxsize=1)
+def get_prompts():
+    logger.info("Loading prompts (cached)")
+    prompt1 = read_prompt_from_plain_file("prompts/response_1")
+    prompt2 = read_prompt_from_plain_file("prompts/response_2")
+    return {"prompt1": prompt1, "prompt2": prompt2}
 ```
 
-**Returns:** Dict with `prompt_1` and `prompt_2` keys
+**Returns:** Dict with `prompt1` and `prompt2` keys
 
 ---
 
@@ -420,17 +446,21 @@ sequenceDiagram
 ### Streaming Implementation
 
 ```python
-async def stream_generator():
-    async for partial in instructor_client.chat.completions.create_partial(
-        model="claude-sonnet-4-20250514",
-        messages=messages,
-        response_model=FinalResponse,
-        stream=True,
-    ):
-        yield partial.model_dump_json() + "\n"
+stream = self.instructor_client.completions.create_partial(
+    model=self.llm_config["model"],
+    response_model=FinalResponse,
+    messages=[{"role": "user", "content": query_content}],
+    context={"query": query},
+    temperature=self.llm_config["temperature"],
+    max_tokens=self.llm_config["max_tokens"],
+    max_retries=3,
+)
+
+async for partial in stream:
+    yield partial.model_dump_json() + "\n"
 
 return StreamingResponse(
-    stream_generator(),
+    controller.query(query, top_k, session_id),
     media_type="text/event-stream"
 )
 ```

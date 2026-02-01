@@ -25,7 +25,7 @@ graph TB
     subgraph External["External Services"]
         Qdrant["Qdrant Vector DB"]
         Supabase["Supabase Storage"]
-        Anthropic["Claude Sonnet 3.7"]
+        Anthropic["Claude Sonnet 4"]
     end
 
     CLI --> Router
@@ -173,6 +173,10 @@ graph LR
 | `instructor_client` | `AsyncInstructor` | Structured LLM client |
 | `qdrant_client` | `AsyncQdrantClient` | Vector DB client |
 | `collection_name` | `str` | Qdrant collection name |
+| `model_semaphore` | `asyncio.Semaphore` | Concurrency control for GPU access |
+| `qdrant_semaphore` | `asyncio.Semaphore` | Concurrency control for Qdrant connections |
+| `llm_config` | `dict[str, Any]` | LLM model configuration |
+| `settings` | `Settings` | Application settings |
 
 ## Dependency Injection
 
@@ -195,6 +199,7 @@ graph TD
         D6["get_collection_name()"]
         D7["get_instructor_client()"]
         D8["get_prompts()"]
+        D9["get_qdrant_semaphore()"]
     end
 
     subgraph Endpoint["Endpoint Handler"]
@@ -281,7 +286,7 @@ graph LR
         Prompts["System Prompts"]
     end
 
-    subgraph Anthropic["Claude Sonnet 3.7"]
+    subgraph Anthropic["Claude Sonnet 4"]
         Vision["Vision Processing"]
         Generate["Text Generation"]
     end
@@ -318,3 +323,12 @@ Query responses use Server-Sent Events for real-time output.
 
 ### 6. Retry Pattern
 Qdrant operations use Tenacity for automatic retry with exponential backoff.
+
+### 7. Semaphore Pattern
+Model inference is protected by asyncio.Semaphore to prevent concurrent GPU access.
+
+### 8. Middleware Pattern
+Request timeouts and rate limiting are implemented as middleware layers.
+
+### 9. Bearer Token Authentication
+JWT-based authentication using Supabase tokens validates user identity.

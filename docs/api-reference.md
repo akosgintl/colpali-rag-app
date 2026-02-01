@@ -125,7 +125,7 @@ sequenceDiagram
     participant ColQwen as ColQwen 2.5
     participant Qdrant
     participant Supabase
-    participant Claude as Claude Sonnet 3.7
+    participant Claude as Claude Sonnet 4
 
     Client->>API: POST /query/
     API->>ColQwen: Embed query
@@ -206,6 +206,29 @@ The response is streamed as Server-Sent Events (SSE). Each chunk is a JSON objec
 
 ---
 
+## Authentication
+
+All endpoints except `/health` require authentication when `AUTH_ENABLED=true` (default).
+
+### Bearer Token
+
+Include a valid Supabase JWT token in the `Authorization` header:
+
+```bash
+curl -X POST "http://localhost:8000/query/" \
+  -H "Authorization: Bearer <your-supabase-jwt-token>" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "query=What are the key findings?" \
+  -d "top_k=5" \
+  -d "session_id=550e8400-e29b-41d4-a716-446655440000"
+```
+
+### Disabling Authentication
+
+Set `AUTH_ENABLED=false` in your `.env` file for development or internal deployments.
+
+---
+
 ## Error Handling
 
 ### HTTP Status Codes
@@ -214,8 +237,12 @@ The response is streamed as Server-Sent Events (SSE). Each chunk is a JSON objec
 |------|-------------|
 | `200` | Success |
 | `400` | Bad Request - Invalid parameters |
+| `401` | Unauthorized - Missing or invalid authentication token |
+| `413` | Payload Too Large - File exceeds size limit |
 | `422` | Validation Error - Missing required fields |
+| `429` | Too Many Requests - Rate limit exceeded |
 | `500` | Internal Server Error |
+| `504` | Gateway Timeout - Request exceeded timeout limit |
 
 ### Validation Error Response
 
@@ -235,11 +262,59 @@ The response is streamed as Server-Sent Events (SSE). Each chunk is a JSON objec
 
 ## Rate Limits
 
-Rate limits are determined by the external services:
+### Application Rate Limits
+
+The application enforces rate limits per IP address:
+
+| Endpoint | Default Limit | Environment Variable |
+|----------|---------------|---------------------|
+| `/query/` | 30 requests/minute | `QUERY_RATE_LIMIT` |
+| `/ingest-pdfs/` | 10 requests/minute | `INGEST_RATE_LIMIT` |
+| `/health` | No limit | - |
+
+### Rate Limit Response
+
+When rate limited, the API returns HTTP 429:
+
+```json
+{
+  "error": "Rate limit exceeded: 30 per 1 minute"
+}
+```
+
+### External Service Limits
+
+External services have their own limits:
 
 - **Anthropic API**: Check your API tier limits
 - **Qdrant**: Depends on deployment configuration
 - **Supabase**: Based on your plan limits
+
+---
+
+## Request Limits
+
+### File Size Limits
+
+| Limit | Default | Environment Variable |
+|-------|---------|---------------------|
+| Max file size | 50 MB | `MAX_FILE_SIZE_MB` |
+| Max total upload | 200 MB | `MAX_TOTAL_UPLOAD_MB` |
+| Max pages per PDF | 200 | `MAX_PDF_PAGES` |
+
+### Timeout Limits
+
+| Limit | Default | Environment Variable |
+|-------|---------|---------------------|
+| Request timeout | 300 seconds | any `TIMEOUT_SECONDS` |
+
+When a request times out, the API returns HTTP 504:
+
+```json
+{
+  "detail": "Request timed out after 300 seconds"
+}
+```
 
 ---
 

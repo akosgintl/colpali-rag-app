@@ -36,11 +36,16 @@ class ColQwen2_5Loader:
         model = self.load_model()
         processor = self.load_processor()
         elapsed = time.perf_counter() - start
-        logger.success("Model and processor loaded | time_seconds={:.2f}", elapsed)
+        logger.success(
+            "Model and processor loaded | time_seconds={:.2f}", elapsed
+        )
         return model, processor
 
     def load_model(self) -> ColQwen2_5:
-        logger.debug("Loading ColQwen2_5 model from pretrained | path={}", self.model_name)
+        logger.info(
+            "Loading ColQwen2_5 model from pretrained | path={}",
+            self.model_name,
+        )
         start = time.perf_counter()
         model = ColQwen2_5.from_pretrained(
             pretrained_model_name_or_path=self.model_name,
@@ -49,16 +54,16 @@ class ColQwen2_5Loader:
             attn_implementation=self._attn_implementation,
         ).eval()
         elapsed = time.perf_counter() - start
-        logger.debug("Model loaded | time_seconds={:.2f}", elapsed)
+        logger.info("Model loaded | time_seconds={:.2f}", elapsed)
         return model
 
     def load_processor(self) -> ColQwen2_5_Processor:
-        logger.debug("Loading ColQwen2_5Processor")
+        logger.info("Loading ColQwen2_5Processor")
         start = time.perf_counter()
         processor = ColQwen2_5_Processor.from_pretrained(
             pretrained_model_name_or_path=self.model_name
         )
         assert isinstance(processor, ColQwen2_5_Processor)
         elapsed = time.perf_counter() - start
-        logger.debug("Processor loaded | time_seconds={:.2f}", elapsed)
+        logger.info("Processor loaded | time_seconds={:.2f}", elapsed)
         return processor

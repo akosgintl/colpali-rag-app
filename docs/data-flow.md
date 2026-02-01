@@ -171,7 +171,7 @@ sequenceDiagram
     participant ColQwen as ColQwen 2.5
     participant Qdrant
     participant Supabase
-    participant Claude as Claude Sonnet 3.7
+    participant Claude as Claude Sonnet 4
 
     Client->>Controller: POST /query/
     Note over Controller: query, top_k, session_id

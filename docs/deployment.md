@@ -37,7 +37,7 @@ graph TD
 
 | Requirement | Minimum | Recommended |
 |-------------|---------|-------------|
-| Python | 3.11+ | 3.12 |
+| Python | 3.12+ | 3.12.8 |
 | RAM | 8 GB | 16 GB |
 | GPU | - | NVIDIA (CUDA 11.8+) |
 | Disk | 10 GB | 20 GB |

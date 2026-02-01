@@ -46,76 +46,91 @@ Handles uploading JPEG images to Supabase storage.
 ```mermaid
 classDiagram
     class SupabaseJPEGUploader {
-        -client: AsyncClient
-        -bucket: str
+        -client: SupabaseAsyncClient
+        -bucket_name: str
+        -timeout_seconds: int
 
-        +__init__(client, bucket)
-        +upload_images(images, session_id, file_name) None
-        -_upload_image(image, path) None
+        +__init__(client, bucket_name, timeout_seconds)
+        +upload_images(session_id, file_name, images, start) None
+        -_upload_image(session_id, file_name, page, image) None
     }
 ```
 
 ### Constructor
 
 ```python
-def __init__(self, client: AsyncClient, bucket: str):
+def __init__(
+    self, client: SupabaseAsyncClient, bucket_name: str, timeout_seconds: int = 120
+):
     self.client = client
-    self.bucket = bucket
+    self.bucket_name = bucket_name
+    self.timeout_seconds = timeout_seconds
 ```
 
 **Parameters:**
 - `client`: Supabase async client
-- `bucket`: Storage bucket name (default: "colpali")
+- `bucket_name`: Storage bucket name (default: "colpali")
+- `timeout_seconds`: Timeout for upload operations (default: 120)
 
 ---
 
 ### Methods
 
-#### `upload_images(images, session_id, file_name) -> None`
+#### `upload_images(session_id, file_name, images, start) -> None`
 
-Uploads multiple images concurrently.
+Uploads multiple images concurrently with timeout enforcement.
 
 ```python
 async def upload_images(
     self,
-    images: list[Image.Image],
-    session_id: str,
+    session_id: UUID4,
     file_name: str,
-) -> None:
+    images: list[Image.Image],
+    start: int = 1,
+):
     tasks = [
         self._upload_image(
-            image,
-            f"{session_id}/{file_name}/{i + 1}.jpeg"
+            session_id=session_id,
+            file_name=file_name,
+            page=page,
+            image=image,
         )
-        for i, image in enumerate(images)
+        for page, image in zip(range(start, start + len(images)), images)
     ]
     await asyncio.gather(*tasks)
 ```
 
 **Parameters:**
+- `session_id`: UUID for session grouping
+- `file_name`: Document filename
 - `images`: List of PIL Image objects
-- `session_id`: UUID string for session grouping
-- `file_name`: Document filename (without extension)
+- `start`: Starting page number (default: 1)
 
 **Path Format:** `{session_id}/{file_name}/{page_number}.jpeg`
 
 ---
 
-#### `_upload_image(image, path) -> None`
+#### `_upload_image(session_id, file_name, page, image) -> None`
 
-Uploads a single image to Supabase.
+Uploads a single image to Supabase with timeout.
 
 ```python
-async def _upload_image(self, image: Image.Image, path: str) -> None:
-    buffer = io.BytesIO()
-    image.save(buffer, format="JPEG")
-    buffer.seek(0)
-
-    await self.client.storage.from_(self.bucket).upload(
-        path,
-        buffer.getvalue(),
-        file_options={"content-type": "image/jpeg"}
-    )
+async def _upload_image(
+    self, session_id: UUID4, file_name: str, page: int, image: Image.Image
+):
+    path = f"{session_id}/{file_name}/{page}.jpeg"
+    with BytesIO() as buffer:
+        image.save(buffer, format="JPEG")
+        data = buffer.getvalue()
+        # Wrap upload with timeout
+        await asyncio.wait_for(
+            self.client.storage.from_(id=self.bucket_name).upload(
+                path=path,
+                file=data,
+                file_options={"content-type": "image/jpeg"},
+            ),
+            timeout=self.timeout_seconds,
+        )
 ```
 
 ---
@@ -156,40 +171,50 @@ Handles downloading images from Supabase storage.
 ```mermaid
 classDiagram
     class SupabaseJPEGDownloader {
-        -client: AsyncClient
-        -bucket: str
+        -client: SupabaseAsyncClient
+        -bucket_name: str
+        -timeout_seconds: int
 
-        +__init__(client, bucket)
-        +download_image(path) bytes
+        +__init__(client, bucket_name, timeout_seconds)
+        +download_image(filename) bytes
         +download_images(paths) List[bytes]
-        +download_instructor_images(paths) List[Image]
+        +download_instructor_images(filenames) List[instructor.Image]
     }
 ```
 
 ### Constructor
 
 ```python
-def __init__(self, client: AsyncClient, bucket: str):
+def __init__(
+    self, client: SupabaseAsyncClient, bucket_name: str, timeout_seconds: int = 120
+):
     self.client = client
-    self.bucket = bucket
+    self.bucket_name = bucket_name
+    self.timeout_seconds = timeout_seconds
 ```
 
 ---
 
 ### Methods
 
-#### `download_image(path) -> bytes`
+#### `download_image(filename) -> bytes`
 
-Downloads a single image.
+Downloads a single image with timeout.
 
 ```python
-async def download_image(self, path: str) -> bytes:
-    response = await self.client.storage.from_(self.bucket).download(path)
-    return response
+async def download_image(self, filename: str) -> bytes:
+    # Wrap download with timeout
+    data = await asyncio.wait_for(
+        self.client.storage.from_(id=self.bucket_name).download(
+            path=filename
+        ),
+        timeout=self.timeout_seconds,
+    )
+    return data
 ```
 
 **Parameters:**
-- `path`: Full path in storage (e.g., `"session_id/document/1.jpeg"`)
+- `filename`: Full path in storage (e.g., `"session_id/document/1.jpeg"`)
 
 **Returns:** Image bytes
 
@@ -212,18 +237,20 @@ async def download_images(self, paths: list[str]) -> list[bytes]:
 
 ---
 
-#### `download_instructor_images(paths) -> list[Image]`
+#### `download_instructor_images(filenames) -> list[instructor.Image]`
 
 Downloads images and converts to Instructor format.
 
 ```python
-async def download_instructor_images(self, paths: list[str]) -> list[Image]:
-    image_bytes = await self.download_images(paths)
-    return bytes_list_to_instructor_images(image_bytes)
+async def download_instructor_images(
+    self, filenames: list[str]
+) -> list[instructor.Image]:
+    images_bytes = await self.download_images(paths=filenames)
+    return bytes_list_to_instructor_images(images_bytes=images_bytes)
 ```
 
 **Parameters:**
-- `paths`: List of storage paths
+- `filenames`: List of storage paths
 
 **Returns:** List of Instructor Image objects (base64 encoded)
 
@@ -258,32 +285,30 @@ sequenceDiagram
 
 ## Helper Functions
 
-### `bytes_to_instructor_image(data: bytes) -> Image`
+### `bytes_to_instructor_image(image_bytes: bytes) -> instructor.Image`
 
 Converts image bytes to Instructor Image format.
 
 ```python
-def bytes_to_instructor_image(data: bytes) -> Image:
-    base64_data = base64.b64encode(data).decode("utf-8")
-    return Image(
-        source={
-            "type": "base64",
-            "media_type": "image/jpeg",
-            "data": base64_data,
-        },
-        type="image",
-    )
+def bytes_to_instructor_image(image_bytes: bytes) -> instructor.Image:
+    base64_str = base64.b64encode(image_bytes).decode("utf-8")
+    return instructor.Image.from_raw_base64(base64_str)
 ```
 
 ---
 
-### `bytes_list_to_instructor_images(data_list: list[bytes]) -> list[Image]`
+### `bytes_list_to_instructor_images(images_bytes: list[bytes]) -> list[instructor.Image]`
 
 Batch converts image bytes to Instructor format.
 
 ```python
-def bytes_list_to_instructor_images(data_list: list[bytes]) -> list[Image]:
-    return [bytes_to_instructor_image(data) for data in data_list]
+def bytes_list_to_instructor_images(
+    images_bytes: list[bytes],
+) -> list[instructor.Image]:
+    return [
+        bytes_to_instructor_image(image_bytes=img_bytes)
+        for img_bytes in images_bytes
+    ]
 ```
 
 ---

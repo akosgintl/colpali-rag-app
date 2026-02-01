@@ -16,16 +16,18 @@ class FinalResponse(BaseModel):
         # Suppress warnings for partial objects during streaming
         validate_assignment=True,
     )
-    
+
     references: list[Reference | dict[str, Any]] = Field(
         description="List of unique reference entries indicating where the supporting information was found."
     )
     answer: str = Field(
         description="The complete answer text based solely on the provided context. The answer must include in-text citations in the format [id] corresponding to the references."
     )
-    
-    @field_serializer('references')
-    def serialize_references(self, refs: list[Reference | dict[str, Any]] | None, _info) -> list[dict[str, Any]]:
+
+    @field_serializer("references")
+    def serialize_references(
+        self, refs: list[Reference | dict[str, Any]] | None, _info
+    ) -> list[dict[str, Any]]:
         """Serialize references, handling both complete Reference objects and partial dicts during streaming."""
         if refs is None:
             return []

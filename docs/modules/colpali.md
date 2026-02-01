@@ -50,17 +50,14 @@ Main class for loading the ColQwen 2.5 model with automatic hardware detection.
 classDiagram
     class ColQwen2_5Loader {
         -model_name: str
-        -device: str
-        -dtype: torch.dtype
-        -attn_implementation: str
+        -_device: str
+        -_dtype: torch.dtype
+        -_attn_implementation: str | None
 
         +__init__(model_name: str)
         +load() Tuple[ColQwen2_5, Processor]
         +load_model() ColQwen2_5
         +load_processor() ColQwen2_5_Processor
-        -_detect_device() str
-        -_detect_dtype() torch.dtype
-        -_detect_attention() str
     }
 
     class ColQwen2_5 {
@@ -81,11 +78,21 @@ classDiagram
 ### Constructor
 
 ```python
-def __init__(self, model_name: str):
+def __init__(self, model_name: str) -> None:
     self.model_name = model_name
-    self.device = self._detect_device()
-    self.dtype = self._detect_dtype()
-    self.attn_implementation = self._detect_attention()
+    self._device = (
+        "cuda"
+        if torch.cuda.is_available()
+        else "mps"
+        if torch.backends.mps.is_available()
+        else "cpu"
+    )
+    self._dtype = (
+        torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+    )
+    self._attn_implementation = (
+        "flash_attention_2" if is_flash_attn_2_available() else None
+    )
 ```
 
 **Parameters:**
@@ -97,14 +104,14 @@ def __init__(self, model_name: str):
 
 ```mermaid
 graph TD
-    Start["_detect_device()"]
+    Start["Device Detection"]
 
     CUDA{"torch.cuda.is_available()?"}
     MPS{"torch.backends.mps.is_available()?"}
 
-    RetCUDA["return 'cuda'"]
-    RetMPS["return 'mps'"]
-    RetCPU["return 'cpu'"]
+    RetCUDA["'cuda'"]
+    RetMPS["'mps'"]
+    RetCPU["'cpu'"]
 
     Start --> CUDA
     CUDA -->|Yes| RetCUDA
@@ -114,12 +121,13 @@ graph TD
 ```
 
 ```python
-def _detect_device(self) -> str:
-    if torch.cuda.is_available():
-        return "cuda"
-    elif torch.backends.mps.is_available():
-        return "mps"
-    return "cpu"
+self._device = (
+    "cuda"
+    if torch.cuda.is_available()
+    else "mps"
+    if torch.backends.mps.is_available()
+    else "cpu"
+)
 ```
 
 ---
@@ -128,26 +136,22 @@ def _detect_device(self) -> str:
 
 ```mermaid
 graph TD
-    Start["_detect_dtype()"]
+    Start["Data Type Detection"]
 
-    IsCUDA{"device == 'cuda'?"}
-    SupportsBF16{"cuda.is_bf16_supported()?"}
+    SupportsBF16{"torch.cuda.is_bf16_supported()?"}
 
-    RetBF16["return torch.bfloat16"]
-    RetFP16["return torch.float16"]
+    RetBF16["torch.bfloat16"]
+    RetFP16["torch.float16"]
 
-    Start --> IsCUDA
-    IsCUDA -->|Yes| SupportsBF16
+    Start --> SupportsBF16
     SupportsBF16 -->|Yes| RetBF16
     SupportsBF16 -->|No| RetFP16
-    IsCUDA -->|No| RetFP16
 ```
 
 ```python
-def _detect_dtype(self) -> torch.dtype:
-    if self.device == "cuda" and torch.cuda.is_bf16_supported():
-        return torch.bfloat16
-    return torch.float16
+self._dtype = (
+    torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+)
 ```
 
 ---
@@ -156,25 +160,24 @@ def _detect_dtype(self) -> torch.dtype:
 
 ```mermaid
 graph TD
-    Start["_detect_attention()"]
+    Start["Attention Detection"]
 
-    ImportFA{"Can import flash_attn?"}
+    CheckFA{"is_flash_attn_2_available()?"}
 
     RetFA2["return 'flash_attention_2'"]
-    RetEager["return 'eager'"]
+    RetNone["return None (default)"]
 
-    Start --> ImportFA
-    ImportFA -->|Yes| RetFA2
-    ImportFA -->|No| RetEager
+    Start --> CheckFA
+    CheckFA -->|Yes| RetFA2
+    CheckFA -->|No| RetNone
 ```
 
 ```python
-def _detect_attention(self) -> str:
-    try:
-        import flash_attn  # noqa: F401
-        return "flash_attention_2"
-    except ImportError:
-        return "eager"
+from transformers.utils.import_utils import is_flash_attn_2_available
+
+self._attn_implementation = (
+    "flash_attention_2" if is_flash_attn_2_available() else None
+)
 ```
 
 ---
@@ -198,17 +201,12 @@ Loads the ColQwen 2.5 model from HuggingFace.
 
 ```python
 def load_model(self) -> ColQwen2_5:
-    logger.info(f"Loading model: {self.model_name}")
-    logger.info(f"Device: {self.device}, dtype: {self.dtype}")
-    logger.info(f"Attention: {self.attn_implementation}")
-
     model = ColQwen2_5.from_pretrained(
-        self.model_name,
-        torch_dtype=self.dtype,
-        device_map=self.device,
-        attn_implementation=self.attn_implementation,
+        pretrained_model_name_or_path=self.model_name,
+        device_map=self._device,
+        dtype=self._dtype,
+        attn_implementation=self._attn_implementation,
     ).eval()
-
     return model
 ```
 

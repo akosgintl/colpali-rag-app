@@ -1,3 +1,5 @@
+import logging
+
 from loguru import logger
 from qdrant_client import AsyncQdrantClient, models
 from qdrant_client.http.exceptions import UnexpectedResponse
@@ -17,8 +19,10 @@ async def ensure_collection_exists(
     """Ensure the collection exists, create it if it doesn't."""
     try:
         collections_response = await qdrant_client.get_collections()
-        collections = [collection.name for collection in collections_response.collections]
-        
+        collections = [
+            collection.name for collection in collections_response.collections
+        ]
+
         if collection_name not in collections:
             logger.warning(
                 "Collection does not exist, creating it | collection={}",
@@ -36,16 +40,21 @@ async def ensure_collection_exists(
                 ),
                 on_disk_payload=False,
             )
-            
+
             # Create index on session_id for faster filtering
             await qdrant_client.create_payload_index(
                 collection_name=collection_name,
                 field_name="session_id",
                 field_schema=models.PayloadSchemaType.KEYWORD,
             )
-            logger.info("Collection created successfully | collection={}", collection_name)
+            logger.info(
+                "Collection created successfully | collection={}",
+                collection_name,
+            )
         else:
-            logger.debug("Collection already exists | collection={}", collection_name)
+            logger.info(
+                "Collection already exists | collection={}", collection_name
+            )
     except UnexpectedResponse as e:
         logger.error(
             "Failed to check/create collection | collection={} | error={}",
@@ -67,14 +76,14 @@ async def ensure_collection_exists(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=1, max=10),
     reraise=True,
-    before_sleep=before_sleep_log(logger, "WARNING"),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
 )
 async def upsert_with_retry(
     qdrant_client: AsyncQdrantClient,
     collection_name: str,
     points: list[models.PointStruct],
 ) -> None:
-    logger.debug(
+    logger.info(
         "Upserting points to Qdrant | collection={} | count={}",
         collection_name,
         len(points),
@@ -82,20 +91,22 @@ async def upsert_with_retry(
     try:
         # Ensure collection exists before upserting
         await ensure_collection_exists(qdrant_client, collection_name)
-        
+
         # Now perform the upsert
         result = await qdrant_client.upsert(
             collection_name=collection_name,
             points=points,
             wait=True,
         )
-        logger.debug("Upsert successful | points={} | result={}", len(points), result)
+        logger.info(
+            "Upsert successful | points={} | result={}", len(points), result
+        )
     except UnexpectedResponse as e:
         logger.warning(
             "Upsert failed (will retry) | collection={} | error={} | status={}",
             collection_name,
             str(e),
-            getattr(e, 'status_code', 'unknown'),
+            getattr(e, "status_code", "unknown"),
         )
         raise
     except Exception as e:

@@ -1,4 +1,6 @@
+import asyncio
 from functools import lru_cache
+from typing import Any
 
 from colpali_engine.models import ColQwen2_5, ColQwen2_5_Processor
 from fastapi import Request
@@ -8,6 +10,7 @@ from qdrant_client import AsyncQdrantClient
 
 from app.services.img_downloader import SupabaseJPEGDownloader
 from app.services.img_uploader import SupabaseJPEGUploader
+from app.settings import Settings
 from app.utils.prompt_utils import read_prompt_from_plain_file
 
 
@@ -39,9 +42,25 @@ async def get_instructor_client(request: Request) -> AsyncInstructor:
     return request.state.instructor_client
 
 
+async def get_model_semaphore(request: Request) -> asyncio.Semaphore:
+    return request.state.model_semaphore
+
+
+async def get_qdrant_semaphore(request: Request) -> asyncio.Semaphore:
+    return request.state.qdrant_semaphore
+
+
+async def get_llm_config(request: Request) -> dict[str, Any]:
+    return request.state.llm_config
+
+
+async def get_settings_from_state(request: Request) -> Settings:
+    return request.state.settings
+
+
 @lru_cache(maxsize=1)
 def get_prompts():
-    logger.debug("Loading prompts (cached)")
+    logger.info("Loading prompts (cached)")
     prompt1 = read_prompt_from_plain_file("prompts/response_1")
     prompt2 = read_prompt_from_plain_file("prompts/response_2")
     logger.info(

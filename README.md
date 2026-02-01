@@ -23,7 +23,7 @@ During the ingestion process, the application converts PDFs into JPEGs using the
 ![ingestion](assets/ingestion.png)
 
 ### Inference
-At inference time, the application queries the Qdrant collection using the ColQwen 2.5 embeddings of the query. It returns the top-k results (images) from the collection. Note that Qdrant stores references to the images, not the images themselves. The application fetches these images from Supabase and uses them with a multimodal model (Claude Sonnet 3.7) to generate the response.
+At inference time, the application queries the Qdrant collection using the ColQwen 2.5 embeddings of the query. It returns the top-k results (images) from the collection. Note that Qdrant stores references to the images, not the images themselves. The application fetches these images from Supabase and uses them with a multimodal model (Claude Sonnet 4) to generate the response.
 
 ![inference](assets/inference.png)
 
@@ -35,6 +35,8 @@ At inference time, the application queries the Qdrant collection using the ColQw
 * VectorDB: [Qdrant](https://qdrant.tech/)
 * Storage: [Supabase](https://supabase.com/)
 * Framework: [FastAPI 0.115.8](https://fastapi.tiangolo.com/)
+* Authentication: [PyJWT](https://pyjwt.readthedocs.io/) (Supabase JWT validation)
+* Rate Limiting: [SlowAPI](https://github.com/laurentS/slowapi)
 * Dependency & Package Manager: [uv](https://docs.astral.sh/uv/)
 * Linters: [Ruff](https://docs.astral.sh/ruff/)
 * Type Checking: [MyPy](https://mypy-lang.org/)
@@ -52,7 +54,9 @@ cd colpali-rag-app
 ```shell
 cp .env.example .env
 ```
-```
+
+**Required variables:**
+```bash
 # RAG
 QDRANT_URL=fillme
 QDRANT_API_KEY=fillme
@@ -64,6 +68,34 @@ SUPABASE_KEY=fillme
 
 # ANTHROPIC
 ANTHROPIC_API_KEY=fillme
+```
+
+**Optional variables (with defaults):**
+```bash
+# Authentication (set AUTH_ENABLED=false to disable)
+AUTH_ENABLED=true
+SUPABASE_JWT_SECRET=your-jwt-secret  # Required if AUTH_ENABLED=true
+
+# LLM Configuration
+DEFAULT_MODEL=claude-sonnet-4-20250514
+MAX_TOKENS=8192
+
+# Rate Limiting
+QUERY_RATE_LIMIT=30/minute
+INGEST_RATE_LIMIT=10/minute
+
+# Processing Limits
+MAX_FILE_SIZE_MB=50
+MAX_PDF_PAGES=200
+
+# Timeouts
+INGEST_ENDPOINT_TIMEOUT_SECONDS=600
+QUERY_ENDPOINT_TIMEOUT_SECONDS=180
+QDRANT_TIMEOUT_SECONDS=60
+SUPABASE_TIMEOUT_SECONDS=120
+ANTHROPIC_TIMEOUT_SECONDS=180
+PDF_CONVERSION_TIMEOUT_SECONDS=120
+COLPALI_INFERENCE_TIMEOUT_SECONDS=60
 ```
 
 3. **Create your (empty) Qdrant collection**

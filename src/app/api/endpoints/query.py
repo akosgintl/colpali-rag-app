@@ -1,26 +1,35 @@
+import asyncio
 import time
 from typing import Annotated, Any, AsyncIterator
 
 import torch
 from colpali_engine.models import ColQwen2_5, ColQwen2_5_Processor
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from instructor import AsyncInstructor
 from loguru import logger
 from pydantic import UUID4
 from qdrant_client import AsyncQdrantClient, models
 
+from app.api.auth import get_current_user
 from app.api.dependencies import (
     get_collection_name,
     get_colpali_model,
     get_colpali_processor,
     get_instructor_client,
+    get_llm_config,
+    get_model_semaphore,
     get_prompts,
     get_qdrant_client,
+    get_qdrant_semaphore,
+    get_settings_from_state,
     get_supabase_downloader,
 )
+from app.api.rate_limit import get_query_rate_limit, limiter
 from app.models.query_response import FinalResponse
 from app.services.img_downloader import SupabaseJPEGDownloader
+from app.settings import Settings
 
 router = APIRouter()
 
@@ -35,6 +44,10 @@ class QueryController:
         qdrant_client: AsyncQdrantClient,
         collection_name: str,
         prompts: dict[str, str],
+        model_semaphore: asyncio.Semaphore,
+        qdrant_semaphore: asyncio.Semaphore,
+        llm_config: dict[str, Any],
+        settings: Settings,
     ) -> None:
         self.model = model
         self.processor = processor
@@ -43,6 +56,10 @@ class QueryController:
         self.qdrant_client = qdrant_client
         self.collection_name = collection_name
         self.prompts = prompts
+        self.model_semaphore = model_semaphore
+        self.qdrant_semaphore = qdrant_semaphore
+        self.llm_config = llm_config
+        self.settings = settings
 
     async def query(
         self, query: str, top_k: int, session_id: UUID4
@@ -56,32 +73,89 @@ class QueryController:
             query[:200],
         )
 
+        # Create generator with timeout enforcement
+        generator = self._process_query(query, top_k, session_id, request_start)
+        timeout = self.settings.timeout.query_endpoint_timeout_seconds
+        
+        try:
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(
+                        generator.__anext__(),
+                        timeout=timeout,
+                    )
+                    yield chunk
+                except StopAsyncIteration:
+                    break
+        except asyncio.TimeoutError:
+            logger.error(
+                "Query endpoint timeout | session_id={} | timeout_seconds={}",
+                session_id,
+                timeout,
+            )
+            # Close the generator to clean up resources
+            await generator.aclose()
+            # Yield error message as final chunk
+            error_response = {
+                "references": [],
+                "answer": f"Query timed out after {timeout} seconds",
+            }
+            yield FinalResponse(**error_response).model_dump_json() + "\n"
+        except Exception:
+            # Ensure generator is closed on any other exception
+            await generator.aclose()
+            raise
+
+    async def _process_query(
+        self, query: str, top_k: int, session_id: UUID4, request_start: float
+    ) -> AsyncIterator[Any]:
         embed_start = time.perf_counter()
-        with torch.inference_mode():
-            processed_queries = self.processor.process_queries(
-                queries=[query]
-            ).to(self.model.device)
-            query_embeddings = self.model(**processed_queries)
+
+        def _run_query_embedding():
+            with torch.inference_mode():
+                processed = self.processor.process_queries(queries=[query]).to(
+                    self.model.device
+                )
+                embeddings = self.model(**processed)
+                return embeddings
+
+        try:
+            async with self.model_semaphore:
+                query_embeddings = await asyncio.wait_for(
+                    run_in_threadpool(_run_query_embedding),
+                    timeout=self.settings.timeout.colpali_inference_timeout_seconds,
+                )
+        except asyncio.TimeoutError:
+            logger.error(
+                "Query embedding timeout | session_id={} | timeout_seconds={}",
+                session_id,
+                self.settings.timeout.colpali_inference_timeout_seconds,
+            )
+            raise
+
         embed_time = time.perf_counter() - embed_start
-        logger.debug("Query embedding generated | time_ms={:.2f}", embed_time * 1000)
+        logger.info(
+            "Query embedding generated | time_ms={:.2f}", embed_time * 1000
+        )
 
         search_start = time.perf_counter()
-        search_results = await self.qdrant_client.query_points(
-            collection_name=self.collection_name,
-            query=query_embeddings[0].cpu().float().tolist(),
-            limit=top_k,
-            query_filter=models.Filter(
-                must=[
-                    models.FieldCondition(
-                        key="session_id",
-                        match=models.MatchValue(value=str(session_id)),
-                    )
-                ]
-            ),
-            search_params=models.SearchParams(hnsw_ef=128, exact=False),
-        )
+        async with self.qdrant_semaphore:
+            search_results = await self.qdrant_client.query_points(
+                collection_name=self.collection_name,
+                query=query_embeddings[0].cpu().float().tolist(),
+                limit=top_k,
+                query_filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="session_id",
+                            match=models.MatchValue(value=str(session_id)),
+                        )
+                    ]
+                ),
+                search_params=models.SearchParams(hnsw_ef=128, exact=False),
+            )
         search_time = time.perf_counter() - search_start
-        logger.debug(
+        logger.info(
             "Qdrant search completed | results={} | time_ms={:.2f}",
             len(search_results.points),
             search_time * 1000,
@@ -93,14 +167,15 @@ class QueryController:
                 session_id,
                 query[:100],
             )
-            
+
             # Diagnostic: Try searching without session_id filter to see if there's any data
-            diagnostic_results = await self.qdrant_client.query_points(
-                collection_name=self.collection_name,
-                query=query_embeddings[0].cpu().float().tolist(),
-                limit=1,
-                search_params=models.SearchParams(hnsw_ef=128, exact=False),
-            )
+            async with self.qdrant_semaphore:
+                diagnostic_results = await self.qdrant_client.query_points(
+                    collection_name=self.collection_name,
+                    query=query_embeddings[0].cpu().float().tolist(),
+                    limit=1,
+                    search_params=models.SearchParams(hnsw_ef=128, exact=False),
+                )
             logger.info(
                 "Diagnostic search without filter | total_points_found={}",
                 len(diagnostic_results.points),
@@ -125,7 +200,7 @@ class QueryController:
             filenames=filenames
         )
         download_time = time.perf_counter() - download_start
-        logger.debug(
+        logger.info(
             "Images downloaded | count={} | time_ms={:.2f}",
             len(instructor_images),
             download_time * 1000,
@@ -148,12 +223,12 @@ class QueryController:
         )
 
         stream = self.instructor_client.completions.create_partial(
-            model="claude-3-7-sonnet-latest",
+            model=self.llm_config["model"],
             response_model=FinalResponse,
             messages=[{"role": "user", "content": query_content}],  # type: ignore
             context={"query": query},
-            temperature=0.0,
-            max_tokens=8192,
+            temperature=self.llm_config["temperature"],
+            max_tokens=self.llm_config["max_tokens"],
             max_retries=3,
         )
 
@@ -172,7 +247,9 @@ class QueryController:
 
 
 @router.post("/query/")
+@limiter.limit(get_query_rate_limit)
 async def query_endpoint(
+    request: Request,
     query: str,
     top_k: int,
     session_id: UUID4,
@@ -187,6 +264,11 @@ async def query_endpoint(
     qdrant_client: Annotated[AsyncQdrantClient, Depends(get_qdrant_client)],
     collection_name: Annotated[str, Depends(get_collection_name)],
     prompts: Annotated[dict[str, str], Depends(get_prompts)],
+    model_semaphore: Annotated[asyncio.Semaphore, Depends(get_model_semaphore)],
+    qdrant_semaphore: Annotated[asyncio.Semaphore, Depends(get_qdrant_semaphore)],
+    llm_config: Annotated[dict[str, Any], Depends(get_llm_config)],
+    settings: Annotated[Settings, Depends(get_settings_from_state)],
+    current_user: Annotated[dict | None, Depends(get_current_user)],
 ):
     controller = QueryController(
         model=model,
@@ -196,6 +278,10 @@ async def query_endpoint(
         qdrant_client=qdrant_client,
         collection_name=collection_name,
         prompts=prompts,
+        model_semaphore=model_semaphore,
+        qdrant_semaphore=qdrant_semaphore,
+        llm_config=llm_config,
+        settings=settings,
     )
     return StreamingResponse(
         controller.query(query, top_k, session_id),

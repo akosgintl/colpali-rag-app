@@ -31,4 +31,6 @@ COPY --from=builder /app/server.py /app/server.py
 COPY --from=builder /app/prompts /app/prompts
 
 ENV PATH="/app/.venv/bin:$PATH" PYTHONPATH="/app/src"
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]
+# Note: For GPU workloads, stick to 1 worker per GPU since each worker loads its own model copy (~8GB).
+# Use WORKERS env var to configure worker count (default: 1)
+CMD ["sh", "-c", "gunicorn server:app --workers ${WORKERS:-1} --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT:-8000} --timeout 600"]
