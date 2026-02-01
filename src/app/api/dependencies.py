@@ -3,6 +3,7 @@ from functools import lru_cache
 from colpali_engine.models import ColQwen2_5, ColQwen2_5_Processor
 from fastapi import Request
 from instructor import AsyncInstructor
+from loguru import logger
 from qdrant_client import AsyncQdrantClient
 
 from app.services.img_downloader import SupabaseJPEGDownloader
@@ -40,6 +41,12 @@ async def get_instructor_client(request: Request) -> AsyncInstructor:
 
 @lru_cache(maxsize=1)
 def get_prompts():
+    logger.debug("Loading prompts (cached)")
     prompt1 = read_prompt_from_plain_file("prompts/response_1")
     prompt2 = read_prompt_from_plain_file("prompts/response_2")
+    logger.info(
+        "Prompts loaded and cached | prompt1_len={} | prompt2_len={}",
+        len(prompt1),
+        len(prompt2),
+    )
     return {"prompt1": prompt1, "prompt2": prompt2}

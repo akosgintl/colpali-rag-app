@@ -1,8 +1,13 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from loguru import logger
 
 from app.api.endpoints import pdf_ingest, query
 from app.api.lifespan import lifespan
+from app.logging_config import configure_logging
+
+configure_logging()
+logger.info("Starting colpali-rag-app server")
 
 app = FastAPI(lifespan=lifespan)
 

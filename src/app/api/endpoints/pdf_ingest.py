@@ -1,3 +1,4 @@
+import time
 from typing import Annotated
 from uuid import uuid4
 
@@ -41,12 +42,31 @@ class PDFIngestController:
     async def ingest(
         self, files: list[UploadFile], session_id: UUID4
     ) -> dict[str, list[dict[str, str | int | None]]]:
+        ingest_start = time.perf_counter()
+        logger.info(
+            "PDF ingest started | session_id={} | file_count={}",
+            session_id,
+            len(files),
+        )
         results = []
         batch_size = 1
 
         for file in files:
+            file_start = time.perf_counter()
+            logger.info(
+                "Processing file | filename={} | session_id={}",
+                file.filename,
+                session_id,
+            )
             try:
                 pdf_bytes = await file.read()
+                logger.debug(
+                    "PDF read | filename={} | size_bytes={}",
+                    file.filename,
+                    len(pdf_bytes),
+                )
+
+                convert_start = time.perf_counter()
                 images = await run_in_threadpool(
                     convert_from_bytes,
                     pdf_file=pdf_bytes,
@@ -54,7 +74,14 @@ class PDFIngestController:
                     thread_count=4,
                     fmt="jpeg",
                 )
+                convert_time = time.perf_counter() - convert_start
                 num_images = len(images)
+                logger.debug(
+                    "PDF converted to images | filename={} | pages={} | time_ms={:.2f}",
+                    file.filename,
+                    num_images,
+                    convert_time * 1000,
+                )
                 total_batches = (num_images + batch_size - 1) // batch_size
 
                 for batch_idx, start_idx in enumerate(
@@ -107,16 +134,33 @@ class PDFIngestController:
                         filename=file.filename,
                     )
 
+                file_time = time.perf_counter() - file_start
+                logger.info(
+                    "File processed successfully | filename={} | pages={} | time_seconds={:.2f}",
+                    file.filename,
+                    num_images,
+                    file_time,
+                )
                 results.append(
                     {"filename": file.filename, "num_pages": num_images}
                 )
             except Exception as e:
                 logger.error(
-                    "Error processing file {filename}: {error}",
-                    filename=file.filename,
-                    error=str(e),
+                    "Error processing file | filename={} | session_id={} | error={}",
+                    file.filename,
+                    session_id,
+                    str(e),
+                    exc_info=True,
                 )
                 results.append({"filename": file.filename, "error": str(e)})
+
+        total_time = time.perf_counter() - ingest_start
+        logger.info(
+            "PDF ingest completed | session_id={} | files={} | total_time_seconds={:.2f}",
+            session_id,
+            len(files),
+            total_time,
+        )
         return {"results": results}
 
 

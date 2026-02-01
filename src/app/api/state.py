@@ -1,4 +1,5 @@
 from anthropic import AsyncAnthropic
+from loguru import logger
 from qdrant_client import AsyncQdrantClient
 from supabase.client import AsyncClient as SupabaseAsyncClient
 
@@ -6,6 +7,7 @@ from app.settings import Settings
 
 
 def create_qdrant_client(settings: Settings) -> AsyncQdrantClient:
+    logger.debug("Initializing AsyncQdrantClient | url={}", settings.qdrant.qdrant_url)
     return AsyncQdrantClient(
         url=settings.qdrant.qdrant_url,
         api_key=settings.qdrant.qdrant_api_key,
@@ -13,6 +15,7 @@ def create_qdrant_client(settings: Settings) -> AsyncQdrantClient:
 
 
 def create_supabase_client(settings: Settings) -> SupabaseAsyncClient:
+    logger.debug("Initializing SupabaseAsyncClient | url={}", settings.supabase.supabase_url)
     return SupabaseAsyncClient(
         supabase_key=settings.supabase.supabase_key,
         supabase_url=settings.supabase.supabase_url,
@@ -20,4 +23,5 @@ def create_supabase_client(settings: Settings) -> SupabaseAsyncClient:
 
 
 def create_anthropic_client(settings: Settings) -> AsyncAnthropic:
+    logger.debug("Initializing AsyncAnthropic client")
     return AsyncAnthropic(api_key=settings.anthropic.anthropic_api_key)
