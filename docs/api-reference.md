@@ -1,37 +1,37 @@
 # API Reference
 
-This document provides detailed documentation for all API endpoints.
+This document provides detailed documentation for all API endpoints across both services.
 
-## Base URL
+## Services Overview
 
-```
-http://localhost:8000
-```
+| Service | Base URL | Description |
+|---------|----------|-------------|
+| Document API | `http://localhost:8000` | PDF ingestion, querying, health check |
+| VLM Service | `http://localhost:8001` | Image/query embedding, health checks |
 
-## Endpoints Overview
+---
+
+## Document API Endpoints (`:8000`)
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/ingest-pdfs/` | POST | Ingest PDF documents |
 | `/query/` | POST | Query ingested documents |
-| `/health` | GET | Health check for container orchestration |
+| `/health` | GET | Health check |
 | `/docs` | GET | Interactive API documentation |
-| `/openapi.json` | GET | OpenAPI schema |
 
----
+### POST /ingest-pdfs/
 
-## POST /ingest-pdfs/
+Ingest PDF documents into the system. PDFs are converted to images, sent to the VLM service for embedding, and stored in Qdrant and Supabase.
 
-Ingest PDF documents into the system. PDFs are converted to images, embedded using ColQwen 2.5, and stored in Qdrant and Supabase.
-
-### Request Flow
+#### Request Flow
 
 ```mermaid
 sequenceDiagram
     participant Client
-    participant API as FastAPI
+    participant API as Document API
     participant PDF as pdf2image
-    participant ColQwen as ColQwen 2.5
+    participant VLM as VLM Service
     participant Qdrant
     participant Supabase
 
@@ -39,9 +39,9 @@ sequenceDiagram
     API->>PDF: Convert PDF to JPEG (300 DPI)
     PDF-->>API: List[PIL.Image]
 
-    loop For each batch
-        API->>ColQwen: Generate embeddings
-        ColQwen-->>API: Embeddings (128-dim)
+    loop For each batch (default: 5 pages)
+        API->>VLM: POST /embed/images (HTTP)
+        VLM-->>API: Embeddings
         API->>Qdrant: Upsert vectors
         Qdrant-->>API: Confirmation
         API->>Supabase: Upload images
@@ -51,7 +51,7 @@ sequenceDiagram
     API-->>Client: IngestResponse
 ```
 
-### Request
+#### Request
 
 **Content-Type:** `multipart/form-data`
 
@@ -60,17 +60,18 @@ sequenceDiagram
 | `files` | `File[]` | Yes | PDF files to ingest |
 | `session_id` | `UUID4` | Yes | Session identifier for filtering |
 
-### Example Request
+#### Example Request
 
 ```bash
 curl -X POST "http://localhost:8000/ingest-pdfs/" \
+  -H "Authorization: Bearer <your-jwt-token>" \
   -H "Content-Type: multipart/form-data" \
   -F "files=@document1.pdf" \
   -F "files=@document2.pdf" \
   -F "session_id=550e8400-e29b-41d4-a716-446655440000"
 ```
 
-### Response
+#### Response
 
 **Content-Type:** `application/json`
 
@@ -89,7 +90,7 @@ curl -X POST "http://localhost:8000/ingest-pdfs/" \
 }
 ```
 
-### Error Response
+#### Error Response
 
 ```json
 {
@@ -102,34 +103,34 @@ curl -X POST "http://localhost:8000/ingest-pdfs/" \
 }
 ```
 
-### Processing Details
+#### Processing Details
 
 1. **PDF Conversion**: Each PDF is converted to JPEG images at 300 DPI using `pdf2image` with 4 threads
-2. **Batch Processing**: Images are processed in batches (default: 1 image per batch)
-3. **Embedding**: ColQwen 2.5 generates 128-dimensional multi-vectors
+2. **Batch Processing**: Images are processed in batches (default: 5 images per batch, configurable via `MAX_PAGES_PER_BATCH`)
+3. **Embedding**: Images sent to VLM service via HTTP, which returns multi-vectors (128-dim for ColQwen2.5, 320-dim for ColQwen3/TomoroAI)
 4. **Storage**: Vectors stored in Qdrant with payload `{session_id, document, page}`
 5. **Image Storage**: JPEGs stored in Supabase at `{session_id}/{document}/{page}.jpeg`
 
 ---
 
-## POST /query/
+### POST /query/
 
 Query ingested documents using natural language. Returns a streaming response with references and an answer.
 
-### Request Flow
+#### Request Flow
 
 ```mermaid
 sequenceDiagram
     participant Client
-    participant API as FastAPI
-    participant ColQwen as ColQwen 2.5
+    participant API as Document API
+    participant VLM as VLM Service
     participant Qdrant
     participant Supabase
     participant Claude as Claude Sonnet 4
 
     Client->>API: POST /query/
-    API->>ColQwen: Embed query
-    ColQwen-->>API: Query vector
+    API->>VLM: POST /embed/query (HTTP)
+    VLM-->>API: Query embedding
     API->>Qdrant: Search (filter: session_id)
     Qdrant-->>API: Matching points
     API->>Supabase: Download images
@@ -142,7 +143,7 @@ sequenceDiagram
     end
 ```
 
-### Request
+#### Request
 
 **Content-Type:** `application/x-www-form-urlencoded`
 
@@ -152,17 +153,18 @@ sequenceDiagram
 | `top_k` | `integer` | Yes | Number of results to retrieve |
 | `session_id` | `UUID4` | Yes | Session identifier for filtering |
 
-### Example Request
+#### Example Request
 
 ```bash
 curl -X POST "http://localhost:8000/query/" \
+  -H "Authorization: Bearer <your-jwt-token>" \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "query=What are the key findings?" \
   -d "top_k=5" \
   -d "session_id=550e8400-e29b-41d4-a716-446655440000"
 ```
 
-### Response
+#### Response
 
 **Content-Type:** `text/event-stream`
 
@@ -174,7 +176,7 @@ The response is streamed as Server-Sent Events (SSE). Each chunk is a JSON objec
 {"references": [{"id": 1, "title": "Key Findings", "filename": "report.pdf"}], "answer": "Based on the documents, the key findings include..."}
 ```
 
-### Final Response Structure
+#### Final Response Structure
 
 ```json
 {
@@ -183,36 +185,128 @@ The response is streamed as Server-Sent Events (SSE). Each chunk is a JSON objec
       "id": 1,
       "title": "Section Title",
       "filename": "document.pdf"
-    },
-    {
-      "id": 2,
-      "title": "Another Section",
-      "filename": "document.pdf"
     }
   ],
-  "answer": "The analysis shows significant improvements [1]. Additional details can be found in the methodology section [2]."
+  "answer": "The analysis shows significant improvements [1]."
 }
 ```
 
-### Response Fields
+---
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `references` | `Reference[]` | List of cited document references |
-| `references[].id` | `integer` | Citation number (used in answer) |
-| `references[].title` | `string` | Section or page title |
-| `references[].filename` | `string` | Source document filename |
-| `answer` | `string` | Generated answer with citations `[1]`, `[2]` |
+### GET /health
+
+Health check endpoint for container orchestration and load balancers.
+
+```bash
+curl http://localhost:8000/health
+```
+
+```json
+{
+  "status": "healthy"
+}
+```
+
+---
+
+## VLM Service Endpoints (`:8001`)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/embed/images` | POST | Generate image embeddings |
+| `/embed/query` | POST | Generate query embedding |
+| `/health` | GET | Health check (model status) |
+| `/health/detailed` | GET | Detailed health with model info |
+| `/docs` | GET | Interactive API documentation |
+
+### POST /embed/images
+
+Generate embeddings for a list of images.
+
+#### Request
+
+**Content-Type:** `multipart/form-data`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `images` | `File[]` | Yes | JPEG/PNG image files |
+
+#### Response
+
+```json
+{
+  "embeddings": [[[0.1, 0.2, ...], [0.3, 0.4, ...]], ...],
+  "processing_time_ms": 1234.56
+}
+```
+
+Returns multi-vectors for each image:
+- **128-dim** for ColQwen2.5
+- **320-dim** for ColQwen3/TomoroAI
+
+---
+
+### POST /embed/query
+
+Generate embedding for a text query.
+
+#### Request
+
+**Content-Type:** `application/json`
+
+```json
+{
+  "query": "What are the key findings?"
+}
+```
+
+#### Response
+
+```json
+{
+  "embedding": [[0.1, 0.2, ...], [0.3, 0.4, ...]],
+  "processing_time_ms": 234.56
+}
+```
+
+---
+
+### GET /health
+
+Returns model load status. Returns 503 if model is not yet loaded.
+
+```json
+{
+  "status": "healthy",
+  "model_loaded": true
+}
+```
+
+### GET /health/detailed
+
+Returns detailed model information.
+
+```json
+{
+  "status": "healthy",
+  "model_loaded": true,
+  "device": "cuda",
+  "model_name": "vidore/colqwen2.5-v0.2"
+}
+```
 
 ---
 
 ## Authentication
 
-All endpoints except `/health` require authentication when `AUTH_ENABLED=true` (default).
+Both services support optional JWT authentication via Supabase tokens.
+
+- **Document API**: `AUTH_ENABLED=true` by default. All endpoints except `/health` require a valid JWT token.
+- **VLM Service**: `AUTH_ENABLED=false` by default. When enabled, `/embed/*` endpoints require authentication. Health endpoints remain unauthenticated for Docker healthchecks.
+
+The Document API forwards auth tokens to the VLM service when making embedding requests.
 
 ### Bearer Token
-
-Include a valid Supabase JWT token in the `Authorization` header:
 
 ```bash
 curl -X POST "http://localhost:8000/query/" \
@@ -222,10 +316,6 @@ curl -X POST "http://localhost:8000/query/" \
   -d "top_k=5" \
   -d "session_id=550e8400-e29b-41d4-a716-446655440000"
 ```
-
-### Disabling Authentication
-
-Set `AUTH_ENABLED=false` in your `.env` file for development or internal deployments.
 
 ---
 
@@ -242,29 +332,12 @@ Set `AUTH_ENABLED=false` in your `.env` file for development or internal deploym
 | `422` | Validation Error - Missing required fields |
 | `429` | Too Many Requests - Rate limit exceeded |
 | `500` | Internal Server Error |
+| `503` | Service Unavailable - VLM model not loaded |
 | `504` | Gateway Timeout - Request exceeded timeout limit |
-
-### Validation Error Response
-
-```json
-{
-  "detail": [
-    {
-      "loc": ["body", "session_id"],
-      "msg": "field required",
-      "type": "value_error.missing"
-    }
-  ]
-}
-```
 
 ---
 
-## Rate Limits
-
-### Application Rate Limits
-
-The application enforces rate limits per IP address:
+## Rate Limits (Document API)
 
 | Endpoint | Default Limit | Environment Variable |
 |----------|---------------|---------------------|
@@ -272,27 +345,9 @@ The application enforces rate limits per IP address:
 | `/ingest-pdfs/` | 10 requests/minute | `INGEST_RATE_LIMIT` |
 | `/health` | No limit | - |
 
-### Rate Limit Response
-
-When rate limited, the API returns HTTP 429:
-
-```json
-{
-  "error": "Rate limit exceeded: 30 per 1 minute"
-}
-```
-
-### External Service Limits
-
-External services have their own limits:
-
-- **Anthropic API**: Check your API tier limits
-- **Qdrant**: Depends on deployment configuration
-- **Supabase**: Based on your plan limits
-
 ---
 
-## Request Limits
+## Request Limits (Document API)
 
 ### File Size Limits
 
@@ -304,17 +359,11 @@ External services have their own limits:
 
 ### Timeout Limits
 
-| Limit | Default | Environment Variable |
-|-------|---------|---------------------|
-| Request timeout | 300 seconds | any `TIMEOUT_SECONDS` |
-
-When a request times out, the API returns HTTP 504:
-
-```json
-{
-  "detail": "Request timed out after 300 seconds"
-}
-```
+| Limit | Default | Description |
+|-------|---------|-------------|
+| Ingest timeout | 600s | `/ingest-pdfs/` endpoint |
+| Query timeout | 180s | `/query/` endpoint |
+| VLM inference timeout | 60s | VLM service per-request |
 
 ---
 
@@ -358,30 +407,8 @@ asyncio.run(ingest_pdfs())
 
 ---
 
-## GET /health
-
-Health check endpoint for container orchestration and load balancers.
-
-### Request
-
-```bash
-curl http://localhost:8000/health
-```
-
-### Response
-
-**Content-Type:** `application/json`
-
-```json
-{
-  "status": "healthy"
-}
-```
-
-This endpoint is used by Docker health checks, Kubernetes probes, and RunPod to verify the application is running.
-
----
-
 ## OpenAPI Schema
 
-The full OpenAPI schema is available at `/openapi.json`. Interactive documentation is available at `/docs` (Swagger UI) and `/redoc` (ReDoc).
+Each service has its own interactive documentation:
+- Document API: `http://localhost:8000/docs`
+- VLM Service: `http://localhost:8001/docs`

@@ -1,0 +1,48 @@
+[project]
+name = "colpali-vlm"
+version = "1.0.0"
+description = "Vision Language Model embedding service using ColQwen2.5"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "colpali-engine",
+    "fastapi[standard]>=0.115.8",
+    "gunicorn>=23.0.0",
+    "loguru>=0.7.3",
+    "pillow>=10.0.0",
+    "pydantic-settings>=2.8.0",
+    "pyjwt>=2.8.0",
+    "python-multipart>=0.0.9",
+    # Pin versions to match RunPod base image (pytorch:1.0.2-cu1281-torch280-ubuntu2404)
+    "torch>=2.8.0,<2.9.0",
+    "torchvision>=0.23.0,<0.24.0",
+    "transformers==4.57.6",
+    # Quantization libraries (prevent missing dependency errors)
+    "accelerate>=0.26.0",
+]
+
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vlm"]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=6.29.5",
+]
+type = [
+    "mypy>=1.15.0",
+]
+
+[tool.uv.sources]
+colpali-engine = { git = "https://github.com/illuin-tech/colpali" }
+
+[tool.ruff]
+line-length = 80
+
+[tool.mypy]
+plugins = ["pydantic.mypy"]
+ignore_missing_imports = true

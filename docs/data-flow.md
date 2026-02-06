@@ -1,6 +1,6 @@
 # Data Flow
 
-This document describes the complete data flow through the ColPali RAG App system.
+This document describes the complete data flow through the ColPali RAG App's two-service architecture.
 
 ## Overview
 
@@ -19,15 +19,27 @@ graph TB
         Response["Generated Response"]
     end
 
+    subgraph Services["Services"]
+        API["Document API (:8000)"]
+        VLM["VLM Service (:8001)"]
+    end
+
     subgraph Storage["Storage Layer"]
         Qdrant["Qdrant Vectors"]
         Supabase["Supabase Images"]
     end
 
-    PDF --> Images --> Embeddings --> Qdrant
+    PDF --> API
+    API --> Images
+    Images -->|HTTP| VLM
+    VLM --> Embeddings
+    Embeddings --> Qdrant
     Images --> Supabase
 
-    UserQuery --> QueryEmbed --> Qdrant
+    UserQuery --> API
+    API -->|HTTP| VLM
+    VLM --> QueryEmbed
+    QueryEmbed --> Qdrant
     Qdrant --> Results
     Supabase --> Results
     Results --> Response
@@ -44,46 +56,46 @@ The ingestion pipeline processes PDF documents and prepares them for retrieval.
 ```mermaid
 sequenceDiagram
     participant Client
-    participant Controller as PDFIngestController
+    participant API as Document API
     participant PDF2Image as pdf2image
-    participant ColQwen as ColQwen 2.5
+    participant VLM as VLM Service
     participant Qdrant
     participant Supabase
 
-    Client->>Controller: POST /ingest-pdfs/
-    Note over Controller: files, session_id
+    Client->>API: POST /ingest-pdfs/
+    Note over API: files, session_id
 
     rect rgb(240, 248, 255)
-        Note over Controller,PDF2Image: PDF Conversion
-        Controller->>PDF2Image: convert_from_bytes()
+        Note over API,PDF2Image: PDF Conversion
+        API->>PDF2Image: convert_from_bytes()
         Note over PDF2Image: 300 DPI, 4 threads
-        PDF2Image-->>Controller: List[PIL.Image]
+        PDF2Image-->>API: List[PIL.Image]
     end
 
     rect rgb(255, 248, 240)
-        Note over Controller,ColQwen: Embedding Generation
-        loop For each batch
-            Controller->>ColQwen: Process images
-            Note over ColQwen: torch.inference_mode()
-            ColQwen-->>Controller: embeddings (128-dim)
+        Note over API,VLM: Embedding Generation (HTTP)
+        loop For each batch (default: 5 pages)
+            API->>VLM: POST /embed/images
+            Note over VLM: torch.inference_mode()
+            VLM-->>API: embeddings (128/320-dim)
         end
     end
 
     rect rgb(240, 255, 240)
-        Note over Controller,Qdrant: Vector Storage
-        Controller->>Qdrant: upsert_with_retry()
+        Note over API,Qdrant: Vector Storage
+        API->>Qdrant: upsert_with_retry()
         Note over Qdrant: Multi-vector points
-        Qdrant-->>Controller: Confirmation
+        Qdrant-->>API: Confirmation
     end
 
     rect rgb(255, 240, 255)
-        Note over Controller,Supabase: Image Storage
-        Controller->>Supabase: upload_images()
+        Note over API,Supabase: Image Storage
+        API->>Supabase: upload_images()
         Note over Supabase: {session}/{doc}/{page}.jpeg
-        Supabase-->>Controller: Confirmation
+        Supabase-->>API: Confirmation
     end
 
-    Controller-->>Client: IngestResponse
+    API-->>Client: IngestResponse
 ```
 
 ### Data Transformations
@@ -98,12 +110,12 @@ graph LR
         B["JPEG Images\n(PIL.Image)"]
     end
 
-    subgraph Step2["Step 2: Processing"]
-        C["Processed Batch\n(BatchFeature)"]
+    subgraph Step2["Step 2: HTTP to VLM"]
+        C["Multipart Upload\n(JPEG files)"]
     end
 
     subgraph Step3["Step 3: Embedding"]
-        D["Embeddings\n(Tensor[N, 128])"]
+        D["Embeddings\n(list[list[float]])"]
     end
 
     subgraph Step4["Step 4: Points"]
@@ -111,9 +123,9 @@ graph LR
     end
 
     A -->|"pdf2image\n300 DPI"| B
-    B -->|"processor()"| C
-    C -->|"model.forward()"| D
-    D -->|"to_list()"| E
+    B -->|"VLMClient\nPOST /embed/images"| C
+    C -->|"VLM model\ninference"| D
+    D -->|"to PointStruct"| E
 ```
 
 ### Qdrant Point Structure
@@ -127,7 +139,7 @@ graph TD
         subgraph Vector["vector (multi-vector)"]
             V1["[0.1, 0.2, ..., 0.8]"]
             V2["[0.3, 0.1, ..., 0.5]"]
-            VN["...128 dimensions..."]
+            VN["...128 or 320 dimensions..."]
         end
         subgraph Payload["payload"]
             SID["session_id: UUID"]
@@ -167,203 +179,105 @@ The query pipeline retrieves relevant documents and generates responses.
 ```mermaid
 sequenceDiagram
     participant Client
-    participant Controller as QueryController
-    participant ColQwen as ColQwen 2.5
+    participant API as Document API
+    participant VLM as VLM Service
     participant Qdrant
     participant Supabase
     participant Claude as Claude Sonnet 4
 
-    Client->>Controller: POST /query/
-    Note over Controller: query, top_k, session_id
+    Client->>API: POST /query/
+    Note over API: query, top_k, session_id
 
     rect rgb(240, 248, 255)
-        Note over Controller,ColQwen: Query Embedding
-        Controller->>ColQwen: Process query text
-        ColQwen-->>Controller: query_embedding
+        Note over API,VLM: Query Embedding (HTTP)
+        API->>VLM: POST /embed/query
+        VLM-->>API: query_embedding
     end
 
     rect rgb(255, 248, 240)
-        Note over Controller,Qdrant: Vector Search
-        Controller->>Qdrant: query_points()
+        Note over API,Qdrant: Vector Search
+        API->>Qdrant: query_points()
         Note over Qdrant: filter: session_id
-        Qdrant-->>Controller: ScoredPoints[]
+        Qdrant-->>API: ScoredPoints[]
     end
 
     rect rgb(240, 255, 240)
-        Note over Controller,Supabase: Image Retrieval
-        Controller->>Supabase: download_instructor_images()
-        Supabase-->>Controller: Image[] (base64)
+        Note over API,Supabase: Image Retrieval
+        API->>Supabase: download_instructor_images()
+        Supabase-->>API: Image[] (base64)
     end
 
     rect rgb(255, 240, 255)
-        Note over Controller,Claude: Response Generation
-        Controller->>Claude: create_partial()
+        Note over API,Claude: Response Generation
+        API->>Claude: create_partial()
         Note over Claude: stream=True
         loop Streaming
-            Claude-->>Controller: Partial FinalResponse
-            Controller-->>Client: SSE chunk
+            Claude-->>API: Partial FinalResponse
+            API-->>Client: SSE chunk
         end
     end
 ```
 
-### Search Parameters
+---
 
-```mermaid
-graph LR
-    subgraph Query["Query Request"]
-        Q["query: string"]
-        K["top_k: int"]
-        S["session_id: UUID"]
-    end
+## Error Handling Flow
 
-    subgraph Qdrant["Qdrant Query"]
-        Embed["Query Embedding"]
-        Filter["Filter Condition"]
-        Limit["Limit: top_k"]
-    end
-
-    Q -->|"ColQwen"| Embed
-    S --> Filter
-    K --> Limit
-```
-
-### Prompt Construction
+### VLM Client Errors
 
 ```mermaid
 graph TD
-    subgraph Prompts["Prompt Files"]
-        P1["prompts/response_1\n(System Instructions)"]
-        P2["prompts/response_2\n(Output Format)"]
+    subgraph VLMClient["VLMClient (httpx + tenacity)"]
+        Request["embed_images() / embed_query()"]
+        Retry1["Attempt 1"]
+        Retry2["Attempt 2 (1s backoff)"]
+        Retry3["Attempt 3 (2s backoff)"]
     end
 
-    subgraph Images["Retrieved Images"]
-        I1["Image 1"]
-        I2["Image 2"]
-        I3["Image N"]
+    subgraph Errors["Error Types"]
+        ConnErr["VLMServiceUnavailable\n(connection failed)"]
+        InfErr["VLMInferenceError\n(504 timeout or HTTP error)"]
+        GenErr["VLMClientError\n(base exception)"]
     end
 
-    subgraph Message["Final Message"]
-        M1["prompt_1 text"]
-        M2["<image>Image 1</image>"]
-        M3["<image>Image 2</image>"]
-        M4["<image>Image N</image>"]
-        M5["prompt_2 text"]
-    end
-
-    P1 --> M1
-    I1 --> M2
-    I2 --> M3
-    I3 --> M4
-    P2 --> M5
+    Request --> Retry1
+    Retry1 -->|"httpx error"| Retry2
+    Retry2 -->|"httpx error"| Retry3
+    Retry3 -->|"ConnectError"| ConnErr
+    Retry3 -->|"504"| InfErr
+    Retry3 -->|"Other HTTP"| GenErr
+    Retry1 -->|"Success"| Success["Return embeddings"]
 ```
 
-### Streaming Response
+### Qdrant Retry
 
 ```mermaid
-sequenceDiagram
-    participant Claude as Claude API
-    participant Instructor
-    participant Controller
-    participant Client
+graph TD
+    Start["upsert_with_retry()"]
+    Attempt1["Attempt 1"]
+    Attempt2["Attempt 2 (1s backoff)"]
+    Attempt3["Attempt 3 (2s backoff)"]
+    Success["Return None"]
+    Failure["Raise Exception"]
 
-    Controller->>Instructor: create_partial(stream=True)
-    Instructor->>Claude: API Request
-
-    loop For each chunk
-        Claude-->>Instructor: Partial JSON
-        Instructor-->>Controller: FinalResponse (partial)
-        Controller->>Controller: model_dump_json()
-        Controller-->>Client: SSE: data + newline
-    end
-
-    Note over Client: Final response assembled
-```
-
----
-
-## Data Models
-
-### Ingestion Data Flow
-
-```mermaid
-classDiagram
-    class UploadFile {
-        +filename: str
-        +file: SpooledTemporaryFile
-        +content_type: str
-        +read() bytes
-    }
-
-    class PILImage {
-        +mode: str
-        +size: tuple
-        +save(fp, format)
-    }
-
-    class BatchFeature {
-        +input_ids: Tensor
-        +attention_mask: Tensor
-        +pixel_values: Tensor
-    }
-
-    class Embeddings {
-        +shape: [batch, 128]
-        +dtype: float32
-    }
-
-    class PointStruct {
-        +id: str
-        +vector: dict
-        +payload: dict
-    }
-
-    UploadFile --> PILImage : pdf2image
-    PILImage --> BatchFeature : processor
-    BatchFeature --> Embeddings : model
-    Embeddings --> PointStruct : to_list
-```
-
-### Query Data Flow
-
-```mermaid
-classDiagram
-    class QueryRequest {
-        +query: str
-        +top_k: int
-        +session_id: UUID4
-    }
-
-    class ScoredPoint {
-        +id: str
-        +score: float
-        +payload: dict
-    }
-
-    class InstructorImage {
-        +source: dict
-        +type: str
-    }
-
-    class Reference {
-        +id: int
-        +title: str
-        +filename: str
-    }
-
-    class FinalResponse {
-        +references: list[Reference]
-        +answer: str
-    }
-
-    QueryRequest --> ScoredPoint : qdrant search
-    ScoredPoint --> InstructorImage : supabase download
-    InstructorImage --> FinalResponse : claude generate
-    FinalResponse --> Reference : contains
+    Start --> Attempt1
+    Attempt1 -->|Success| Success
+    Attempt1 -->|Exception| Attempt2
+    Attempt2 -->|Success| Success
+    Attempt2 -->|Exception| Attempt3
+    Attempt3 -->|Success| Success
+    Attempt3 -->|Exception| Failure
 ```
 
 ---
 
 ## Concurrency Model
+
+### Semaphores
+
+| Service | Semaphore | Limit | Purpose |
+|---------|-----------|-------|---------|
+| VLM Service | `model_semaphore` | 1 (configurable) | Prevents concurrent GPU access |
+| Document API | `qdrant_semaphore` | 10 | Prevents Qdrant connection pool exhaustion |
 
 ### Parallel Operations
 
@@ -371,7 +285,7 @@ classDiagram
 graph TB
     subgraph Ingestion["Ingestion (per document)"]
         direction LR
-        Convert["PDF → Images\n(4 threads)"]
+        Convert["PDF to Images\n(4 threads)"]
         Upload["Image Upload\n(asyncio.gather)"]
     end
 
@@ -385,48 +299,20 @@ graph TB
 
 ```mermaid
 sequenceDiagram
-    participant Controller
-    participant Batch1
-    participant Batch2
-    participant BatchN
+    participant API as Document API
+    participant VLM as VLM Service
+    participant Qdrant
+    participant Supabase
 
-    Note over Controller: batch_size = 1
+    Note over API: batch_size = 5 (default)
 
-    Controller->>Batch1: Process images[0:1]
-    Batch1-->>Controller: embeddings
-    Controller->>Controller: Upsert + Upload
+    API->>VLM: POST /embed/images (pages 1-5)
+    VLM-->>API: embeddings
+    API->>Qdrant: upsert_with_retry(points)
+    API->>Supabase: upload_images(batch)
 
-    Controller->>Batch2: Process images[1:2]
-    Batch2-->>Controller: embeddings
-    Controller->>Controller: Upsert + Upload
-
-    Controller->>BatchN: Process images[n-1:n]
-    BatchN-->>Controller: embeddings
-    Controller->>Controller: Upsert + Upload
-```
-
----
-
-## Error Handling Flow
-
-```mermaid
-graph TD
-    subgraph Operation["Operation"]
-        O["Qdrant Upsert"]
-    end
-
-    subgraph Retry["Retry Logic (Tenacity)"]
-        R1["Attempt 1"]
-        R2["Attempt 2 (1s backoff)"]
-        R3["Attempt 3 (2s backoff)"]
-        Fail["Raise Exception"]
-    end
-
-    O --> R1
-    R1 -->|"Exception"| R2
-    R2 -->|"Exception"| R3
-    R3 -->|"Exception"| Fail
-    R1 -->|"Success"| Success["Continue"]
-    R2 -->|"Success"| Success
-    R3 -->|"Success"| Success
+    API->>VLM: POST /embed/images (pages 6-10)
+    VLM-->>API: embeddings
+    API->>Qdrant: upsert_with_retry(points)
+    API->>Supabase: upload_images(batch)
 ```

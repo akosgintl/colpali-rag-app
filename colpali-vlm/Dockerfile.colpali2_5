@@ -1,0 +1,88 @@
+# Development Dockerfile with CUDA support and Flash Attention 2
+# Models downloaded at runtime and cached in volume (vlm_hf_cache)
+# Image size: ~4GB (PyTorch + CUDA + flash-attn, no model weights)
+
+ARG CUDA_VERSION=12.4.1
+
+# Stage 1: Dependencies (use devel image for flash-attn compilation)
+FROM nvidia/cuda:${CUDA_VERSION}-devel-ubuntu22.04 AS deps
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
+
+WORKDIR /app
+
+# Install Python 3.12 via deadsnakes PPA, build tools, and uv
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa -y \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.12 \
+    python3.12-venv \
+    python3.12-dev \
+    git \
+    curl \
+    ninja-build \
+    && curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Set Python 3.12 as default
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
+
+ENV PATH="/root/.local/bin:/app/.venv/bin:$PATH"
+
+# Copy dependency files
+COPY pyproject.toml uv.lock ./
+RUN touch README.md && uv sync --frozen --no-install-project --no-dev --no-cache
+
+# Install flash-attn (requires CUDA dev tools, compiled for the installed torch version)
+# Using MAX_JOBS to limit memory usage during compilation
+ENV MAX_JOBS=4
+RUN uv pip install flash-attn --no-build-isolation --no-cache
+
+# Install additional packages (auto-gptq skipped due to build issues)
+RUN uv pip install cffi auto-round>=0.5 --no-cache
+
+# Stage 2: Build application
+FROM deps AS builder
+COPY src/ ./src/
+COPY server.py ./
+RUN uv sync --frozen --no-dev --no-cache
+
+# Stage 3: Runtime (using runtime for Flash Attention 2 support)
+FROM nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu22.04 AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV HF_HOME=/app/model_cache
+
+WORKDIR /app
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa -y \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.12 \
+    curl \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1 \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Copy from builder stage
+COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /app/src /app/src
+COPY --from=builder /app/server.py /app/server.py
+
+ENV PATH="/app/.venv/bin:$PATH" PYTHONPATH="/app/src"
+
+# Expose port
+EXPOSE 8000
+
+# Health check (extended start period for first-time model download)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=600s --retries=5 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Note: Models will be downloaded on first startup to /app/model_cache (mount a volume here)
+# For GPU workloads, stick to 1 worker per GPU since each worker loads its own model copy (~8GB).
+# Use WORKERS env var to configure worker count (default: 1)
+CMD ["sh", "-c", "gunicorn server:app --workers ${WORKERS:-1} --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT:-8000} --timeout 600"]

@@ -1,32 +1,28 @@
 # Deployment Guide
 
-This document covers deployment options for the ColPali RAG App.
+This document covers deployment options for the ColPali RAG App's two-service architecture.
 
 ## Deployment Options Overview
 
 ```mermaid
 graph TD
     subgraph Dev["Development"]
-        Local["Local Development\n(make dev)"]
-    end
-
-    subgraph Container["Containerized"]
-        Docker["Docker\n(make docker_run)"]
-        Compose["Docker Compose\n(make docker_dev)"]
+        Local["Local Development\n(make dev_vlm + make dev_api)"]
+        DockerDev["Docker Compose\n(make docker_up)"]
     end
 
     subgraph Cloud["Cloud Deployment"]
-        GCP["Google Cloud Run"]
-        AWS["AWS ECS/Fargate"]
-        Azure["Azure Container Apps"]
+        VLMCloud["VLM Service\n(GPU required)"]
+        APICloud["Document API\n(CPU only)"]
     end
 
-    subgraph GPU["GPU Cloud (Recommended)"]
-        RunPod["RunPod\n(make docker_build_runpod)"]
+    subgraph GPU["GPU Cloud"]
+        RunPod["RunPod\n(VLM Service)"]
     end
 
-    Dev --> Container --> Cloud
-    Container --> GPU
+    Local --> DockerDev
+    DockerDev --> Cloud
+    DockerDev --> GPU
 ```
 
 ---
@@ -35,17 +31,17 @@ graph TD
 
 ### System Requirements
 
-| Requirement | Minimum | Recommended |
-|-------------|---------|-------------|
-| Python | 3.12+ | 3.12.8 |
-| RAM | 8 GB | 16 GB |
-| GPU | - | NVIDIA (CUDA 11.8+) |
-| Disk | 10 GB | 20 GB |
+| Component | VLM Service | Document API |
+|-----------|-------------|--------------|
+| CPU | 2+ cores | 2+ cores |
+| RAM | 8 GB | 4 GB |
+| GPU | NVIDIA (16GB+ VRAM) | Not required |
+| Disk | 20 GB | 5 GB |
 
 ### Software Dependencies
 
 - [uv](https://github.com/astral-sh/uv) - Package manager
-- [Poppler](https://poppler.freedesktop.org/) - PDF rendering (for pdf2image)
+- [Poppler](https://poppler.freedesktop.org/) - PDF rendering (Document API only)
 - Docker (for containerized deployment)
 
 ### External Services
@@ -65,331 +61,186 @@ graph TD
 git clone https://github.com/your-org/colpali-rag-app.git
 cd colpali-rag-app
 
-# Install dependencies
-uv sync --all-groups
-
-# Configure environment
-cp .env.example .env
-# Edit .env with your credentials
-
-# Initialize Qdrant collection
-make create_collection
+# Configure environment for both services
+cp colpali-vlm/.env.example colpali-vlm/.env
+cp document-api/.env.example document-api/.env
+# Edit both .env files with your credentials
 ```
 
-### Running the Server
+### Running Both Services
+
+**Option 1: Two terminals**
 
 ```bash
-# Start with hot-reload
-make dev
+# Terminal 1: Start VLM service (requires GPU, port 8001)
+make dev_vlm
+
+# Terminal 2: Start Document API (port 8000)
+make dev_api
 ```
 
-The server will be available at `http://localhost:8000`.
+**Option 2: Docker Compose**
 
-### Development Workflow
+```bash
+# Build and start both services
+make docker_up
 
-```mermaid
-sequenceDiagram
-    participant Dev as Developer
-    participant UV as uv
-    participant Server as FastAPI
-    participant Services as External Services
-
-    Dev->>UV: uv sync --all-groups
-    UV-->>Dev: Dependencies installed
-
-    Dev->>Dev: Edit .env
-
-    Dev->>Server: make create_collection
-    Server->>Services: Create Qdrant collection
-
-    Dev->>Server: make dev
-    Note over Server: Hot-reload enabled
-    Server-->>Dev: http://localhost:8000
-
-    loop Development
-        Dev->>Dev: Edit code
-        Server->>Server: Auto-reload
-    end
+# Or in background
+make docker_up_detach
+make docker_logs        # View logs
+make docker_down        # Stop services
 ```
 
 ### Code Quality Commands
 
 ```bash
-# Run all linters and formatters
-make pretty
-
-# Type checking
-make mypy
-
-# Run all checks
-make all
+make pretty    # Run lint + format + imports on both services
+make mypy      # Type checking for both services
+make all       # All checks + cleanup
 ```
 
 ---
 
 ## Docker Deployment
 
-### Build Architecture
+### Docker Images
 
-```mermaid
-graph TD
-    subgraph Multi-Stage["Multi-Stage Build"]
-        Stage1["deps Stage\n(Install dependencies)"]
-        Stage2["builder Stage\n(Add source code)"]
-        Stage3["runtime Stage\n(Final image)"]
-    end
+The application uses four Docker images:
 
-    Stage1 --> Stage2 --> Stage3
-
-    subgraph Output["Final Image"]
-        Size["~2.1 GB"]
-        Base["python:3.12-slim"]
-    end
-
-    Stage3 --> Output
-```
-
-### Building the Image
-
-```bash
-# Build production image
-make docker_build
-
-# Or manually
-docker build -t colpali-rag-app:latest .
-```
-
-### Running the Container
-
-```bash
-# Run with .env file
-make docker_run
-
-# Or manually
-docker run -p 8000:8000 --env-file .env colpali-rag-app:latest
-```
+| Image | Dockerfile | Size | Use Case |
+|-------|-----------|------|----------|
+| VLM (ColQwen2.5) | `colpali-vlm/Dockerfile.colpali2_5` | ~4GB | Dev: runtime model download |
+| VLM (TomoroAI) | `colpali-vlm/Dockerfile.tomoro-colqwen3` | ~10GB | Dev: runtime model download |
+| VLM (RunPod) | `colpali-vlm/Dockerfile.runpod` | ~15GB | Prod: baked-in models |
+| Document API | `document-api/Dockerfile` | ~500MB | CPU-only, lightweight |
 
 ### Docker Compose (Development)
 
-```bash
-# Start with hot-reload
-make docker_dev
-```
-
-This mounts the source directory for live code updates.
-
-### Docker Compose Configuration
+The `docker-compose.yml` starts both services with the ColQwen2.5 VLM image by default:
 
 ```yaml
-version: "3.8"
-
 services:
-  app:
+  vlm:
     build:
-      context: .
+      context: ./colpali-vlm
+      dockerfile: Dockerfile.colpali2_5    # Switch to Dockerfile.tomoro-colqwen3 for TomoroAI
+    ports:
+      - "8001:8000"
+    env_file:
+      - colpali-vlm/.env
+    volumes:
+      - vlm_hf_cache:/app/model_cache      # Persist model cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  api:
+    build:
+      context: ./document-api
       dockerfile: Dockerfile
     ports:
       - "8000:8000"
     env_file:
-      - .env
-    volumes:
-      - ./src:/app/src  # Hot-reload support
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/docs"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      - document-api/.env
+    depends_on:
+      vlm:
+        condition: service_healthy
+```
+
+### Docker Compose (RunPod)
+
+The `docker-compose.runpod.yml` uses the production VLM image with baked-in models:
+
+```bash
+make docker_runpod_up           # Build and start
+make docker_runpod_up_detach    # Run in background
+make docker_runpod_logs         # View logs
+make docker_runpod_down         # Stop
+```
+
+### Building and Pushing Images
+
+```bash
+# VLM images
+make docker_build_vlm           # Build dev VLM image
+make docker_build_vlm_runpod    # Build RunPod VLM image (~15GB, baked-in models)
+make docker_push_vlm            # Push dev image to Docker Hub
+make docker_push_vlm_runpod     # Push RunPod image to Docker Hub
+
+# API image
+make docker_build_api           # Build Document API image (~500MB)
+make docker_push_api            # Push to Docker Hub
+
+# All at once
+make docker_build_all           # Build VLM (dev) + API
+make docker_push_all            # Push VLM (dev) + API
 ```
 
 ---
 
-## Cloud Deployment
+## RunPod Deployment (GPU)
 
-### Google Cloud Run
-
-```mermaid
-sequenceDiagram
-    participant Dev as Developer
-    participant GCR as Container Registry
-    participant Run as Cloud Run
-    participant Secrets as Secret Manager
-
-    Dev->>GCR: docker push
-    Dev->>Secrets: Store API keys
-    Dev->>Run: gcloud run deploy
-    Run->>GCR: Pull image
-    Run->>Secrets: Inject secrets
-    Run-->>Dev: Service URL
-```
-
-#### Deployment Steps
-
-```bash
-# Authenticate
-gcloud auth login
-gcloud config set project YOUR_PROJECT_ID
-
-# Build and push
-docker build -t gcr.io/YOUR_PROJECT_ID/colpali-rag-app:latest .
-docker push gcr.io/YOUR_PROJECT_ID/colpali-rag-app:latest
-
-# Deploy
-gcloud run deploy colpali-rag-app \
-  --image gcr.io/YOUR_PROJECT_ID/colpali-rag-app:latest \
-  --platform managed \
-  --region us-central1 \
-  --memory 4Gi \
-  --cpu 2 \
-  --set-secrets=QDRANT_API_KEY=qdrant-api-key:latest,\
-                ANTHROPIC_API_KEY=anthropic-key:latest,\
-                SUPABASE_KEY=supabase-key:latest \
-  --set-env-vars=QDRANT_URL=your-qdrant-url,\
-                 SUPABASE_URL=your-supabase-url,\
-                 COLLECTION_NAME=your-collection
-```
-
-### AWS ECS/Fargate
-
-#### Task Definition
-
-```json
-{
-  "family": "colpali-rag-app",
-  "networkMode": "awsvpc",
-  "requiresCompatibilities": ["FARGATE"],
-  "cpu": "2048",
-  "memory": "4096",
-  "containerDefinitions": [
-    {
-      "name": "app",
-      "image": "YOUR_ECR_REPO/colpali-rag-app:latest",
-      "portMappings": [
-        {
-          "containerPort": 8000,
-          "protocol": "tcp"
-        }
-      ],
-      "secrets": [
-        {
-          "name": "QDRANT_API_KEY",
-          "valueFrom": "arn:aws:secretsmanager:region:account:secret:qdrant-key"
-        },
-        {
-          "name": "ANTHROPIC_API_KEY",
-          "valueFrom": "arn:aws:secretsmanager:region:account:secret:anthropic-key"
-        },
-        {
-          "name": "SUPABASE_KEY",
-          "valueFrom": "arn:aws:secretsmanager:region:account:secret:supabase-key"
-        }
-      ],
-      "environment": [
-        {"name": "QDRANT_URL", "value": "your-qdrant-url"},
-        {"name": "SUPABASE_URL", "value": "your-supabase-url"},
-        {"name": "COLLECTION_NAME", "value": "your-collection"}
-      ]
-    }
-  ]
-}
-```
-
-### Azure Container Apps
-
-```bash
-# Create container app
-az containerapp create \
-  --name colpali-rag-app \
-  --resource-group YOUR_RG \
-  --environment YOUR_ENV \
-  --image YOUR_ACR.azurecr.io/colpali-rag-app:latest \
-  --target-port 8000 \
-  --ingress external \
-  --cpu 2 --memory 4Gi \
-  --secrets qdrant-key=YOUR_KEY anthropic-key=YOUR_KEY supabase-key=YOUR_KEY \
-  --env-vars QDRANT_URL=your-url SUPABASE_URL=your-url COLLECTION_NAME=your-collection \
-             QDRANT_API_KEY=secretref:qdrant-key \
-             ANTHROPIC_API_KEY=secretref:anthropic-key \
-             SUPABASE_KEY=secretref:supabase-key
-```
-
-### RunPod (GPU)
-
-RunPod provides GPU instances ideal for running the ColQwen2.5 model with CUDA acceleration. The RunPod image includes **Flash Attention 2** pre-compiled for optimal inference performance.
+RunPod provides GPU instances ideal for running the VLM service with CUDA acceleration.
 
 ```mermaid
-sequenceDiagram
-    participant Dev as Developer
-    participant GH as GitHub Actions
-    participant DH as Docker Hub
-    participant RP as RunPod
+graph LR
+    subgraph Build["Build Phase"]
+        BuildVLM["Build VLM Image\n(~15GB, baked models)"]
+        BuildAPI["Build API Image\n(~500MB)"]
+    end
 
-    Dev->>GH: Push to main
-    GH->>GH: Build GPU image
-    GH->>DH: Push image
-    Dev->>RP: Deploy Pod
-    RP->>DH: Pull image
-    RP-->>Dev: Pod URL
+    subgraph Push["Push Phase"]
+        DH["Docker Hub"]
+    end
+
+    subgraph Deploy["RunPod"]
+        VLM["VLM Pod\n(GPU)"]
+        API["API Pod\n(CPU)"]
+    end
+
+    BuildVLM --> DH
+    BuildAPI --> DH
+    DH --> VLM
+    DH --> API
 ```
 
-#### Prerequisites
-
-1. **Docker Hub Account** - Free tier works (public images)
-2. **RunPod Account** - GPU cloud provider
-3. **GitHub Repository** - For automated builds
-
-#### Setup GitHub Secrets
-
-Add these secrets to your GitHub repository (Settings → Secrets → Actions):
-
-| Secret | Description |
-|--------|-------------|
-| `DOCKERHUB_USERNAME` | Your Docker Hub username |
-| `DOCKERHUB_TOKEN` | Docker Hub access token (create at hub.docker.com → Account Settings → Security) |
-
-#### Automated Build (Recommended)
-
-Push to `main` branch triggers GitHub Actions to build and push:
+### Build and Push
 
 ```bash
-git push origin main
-# Image built and pushed to: your-username/colpali-rag-app:latest
-```
+# Build RunPod-optimized VLM image (baked-in models, Flash Attention 2)
+make docker_build_vlm_runpod
 
-#### Manual Build
+# Build API image
+make docker_build_api
 
-```bash
-# Build GPU-optimized image (~12GB with model + Flash Attention 2)
-make docker_build_runpod
-
-# Push to Docker Hub
+# Push both to Docker Hub
 export DOCKERHUB_USERNAME=your-username
 docker login
-make docker_push_runpod
+make docker_push_vlm_runpod
+make docker_push_api
 ```
 
-#### Deploy on RunPod
+### Deploy on RunPod
 
-1. Go to **RunPod Console** → **Pods** → **Deploy**
-2. Select GPU (minimum 16GB VRAM):
-   - Budget: RTX 4000 Ada, A4000
-   - Recommended: RTX 4090, A5000, A6000
-3. Configure container:
-   - **Image**: `your-dockerhub-username/colpali-rag-app:latest`
-   - **Container Disk**: 20 GB
-   - **HTTP Port**: 8000
-4. Set environment variables:
-   ```
-   QDRANT_URL=https://your-qdrant-instance.cloud.qdrant.io
-   QDRANT_API_KEY=your-qdrant-api-key
-   COLLECTION_NAME=colpali
-   SUPABASE_URL=https://your-project.supabase.co
-   SUPABASE_KEY=your-supabase-key
-   ANTHROPIC_API_KEY=sk-ant-your-key
-   ```
-5. Deploy and access via the provided Pod URL
+1. **VLM Service Pod**:
+   - Select GPU with 16GB+ VRAM (RTX 4000 Ada, A4000, RTX 4090)
+   - Image: `your-username/colpali-vlm:runpod`
+   - Container Disk: 20 GB
+   - HTTP Port: 8000
+   - Set environment variables from `colpali-vlm/.env`
 
-#### GPU Requirements
+2. **API Service Pod** (or deploy elsewhere):
+   - CPU-only instance
+   - Image: `your-username/document-api:latest`
+   - HTTP Port: 8000
+   - Set `VLM_SERVICE_URL` to RunPod VLM pod URL
+   - Set remaining environment variables from `document-api/.env`
+
+### GPU Requirements
 
 | GPU | VRAM | Status |
 |-----|------|--------|
@@ -399,41 +250,36 @@ make docker_push_runpod
 | A4000 | 16GB | Works well |
 | A5000/A6000 | 24-48GB | Optimal |
 
-#### Cost Estimates
-
-| Component | Cost |
-|-----------|------|
-| GitHub Actions | Free (2,000 min/month) |
-| Docker Hub | Free (public repos) |
-| RunPod (16GB GPU) | ~$0.20-0.40/hour |
-| RunPod (24GB GPU) | ~$0.40-0.80/hour |
-
 ---
 
-## Production Considerations
+## Scaling
 
-### Health Checks
+### VLM Service (Vertical)
 
-The application includes a `/health` endpoint for load balancer probes:
+- Scale per GPU (1 worker per GPU recommended)
+- `MAX_CONCURRENT_INFERENCES=1` prevents GPU memory issues
+- Use more powerful GPUs for faster inference
 
-```python
-@app.get("/health")
-async def health_check():
-    """Health check endpoint for container orchestration."""
-    return {"status": "healthy"}
-```
+### Document API (Horizontal)
 
-This endpoint is used by Docker health checks and container orchestrators (Kubernetes, RunPod, etc.).
-
-### Scaling
+- Stateless - can run multiple instances behind a load balancer
+- All state stored in external services (Qdrant, Supabase)
+- No GPU dependency
 
 ```mermaid
 graph TD
-    subgraph Horizontal["Horizontal Scaling"]
-        LB["Load Balancer"]
-        I1["Instance 1"]
-        I2["Instance 2"]
-        I3["Instance N"]
+    subgraph LB["Load Balancer"]
+        Balancer["Nginx / Cloud LB"]
+    end
+
+    subgraph API["Document API Instances"]
+        I1["API Instance 1"]
+        I2["API Instance 2"]
+        I3["API Instance N"]
+    end
+
+    subgraph VLM["VLM Service"]
+        V1["VLM (GPU)"]
     end
 
     subgraph Shared["Shared State"]
@@ -441,9 +287,13 @@ graph TD
         Supabase["Supabase"]
     end
 
-    LB --> I1
-    LB --> I2
-    LB --> I3
+    Balancer --> I1
+    Balancer --> I2
+    Balancer --> I3
+
+    I1 --> V1
+    I2 --> V1
+    I3 --> V1
 
     I1 --> Qdrant
     I2 --> Qdrant
@@ -454,38 +304,25 @@ graph TD
     I3 --> Supabase
 ```
 
-**Key Points:**
-- Application is stateless (state stored in external services)
-- Model loaded per instance (memory consideration)
-- Consider GPU instances for faster inference
+---
 
-### Resource Recommendations
+## Production Considerations
 
-| Workload | CPU | Memory | GPU |
-|----------|-----|--------|-----|
-| Development | 2 cores | 4 GB | Optional |
-| Production (light) | 2 cores | 8 GB | Optional |
-| Production (heavy) | 4 cores | 16 GB | Recommended |
+### Health Checks
+
+Both services include `/health` endpoints:
+
+- **VLM Service**: Returns 503 if model not loaded, 200 when healthy
+- **Document API**: Simple 200 health check
+
+Docker Compose uses these for `depends_on: condition: service_healthy`.
 
 ### Monitoring
 
-```mermaid
-graph LR
-    subgraph App["Application"]
-        Logs["Loguru Logs"]
-        Metrics["Metrics"]
-    end
+Both services use Loguru for structured logging:
 
-    subgraph Observability["Observability Stack"]
-        Loki["Loki / CloudWatch"]
-        Prometheus["Prometheus"]
-        Grafana["Grafana"]
-    end
-
-    Logs --> Loki
-    Metrics --> Prometheus
-    Loki --> Grafana
-    Prometheus --> Grafana
+```
+2024-01-15 10:30:45 | INFO | lifespan:lifespan:42 | Starting application...
 ```
 
 ---
@@ -496,30 +333,21 @@ graph LR
 
 | Issue | Cause | Solution |
 |-------|-------|----------|
-| Out of memory | Model too large | Increase memory or use CPU |
-| PDF conversion fails | Missing Poppler | Install Poppler |
-| Connection refused (Qdrant) | Wrong URL or firewall | Check URL and network |
-| Authentication error | Invalid API key | Verify API keys |
-| Slow inference | No GPU | Use CUDA-enabled instance |
-
-### Debug Mode
-
-Enable debug logging:
-
-```python
-# In logging_config.py
-logger.add(sys.stderr, level="DEBUG")
-```
+| VLM service timeout | Model still loading | Increase `start_period` in Docker healthcheck |
+| Document API fails to start | VLM not ready | API retries VLM health check 30 times with exponential backoff |
+| Out of GPU memory | Model too large | Use a GPU with more VRAM |
+| PDF conversion fails | Missing Poppler | Install `poppler-utils` |
+| Connection refused (VLM) | Wrong URL | Check `VLM_SERVICE_URL` in Document API .env |
+| Vector dimension mismatch | Mismatched config | Ensure `VECTOR_DIM` matches `COLPALI_VECTOR_DIM` |
 
 ### Container Debugging
 
 ```bash
 # Shell into running container
-docker exec -it <container_id> /bin/bash
+docker exec -it colpali_vlm /bin/bash
+docker exec -it document_api /bin/bash
 
 # Check logs
-docker logs <container_id>
-
-# Inspect environment
-docker exec <container_id> env | grep -E "(QDRANT|SUPABASE|ANTHROPIC)"
+docker compose logs vlm
+docker compose logs api
 ```

@@ -15,28 +15,50 @@ ColPali is a document retrieval method that leverages Vision Language Models (VL
 You can find more information about this method in the [ColPali paper](https://arxiv.org/abs/2407.01449). They also have a [ColPali repository](https://github.com/illuin-tech/colpali) with the code and models.
 
 ## Description
-This repository contains the backend for a retrieval augmented generation (RAG) application that leverages the ColPali method. Specifically it uses [ColQwen 2.5 (v0.2)](https://huggingface.co/vidore/colqwen2.5-v0.2) which folows ColPali method to index and retrieve information directly from document images. The backend is built using FastAPI, and uses Qdrant for vector search and Supabase for storage.
+This repository contains the backend for a retrieval augmented generation (RAG) application that leverages the ColPali method. The application is split into **two microservices**:
+
+1. **colpali-vlm/** - A GPU-based VLM embedding service that handles model inference. Supports multiple models: [ColQwen 2.5](https://huggingface.co/vidore/colqwen2.5-v0.2) (128-dim), ColQwen3 (320-dim), and [TomoroAI ColQwen3](https://huggingface.co/TomoroAI/tomoro-colqwen3-embed-4b) (320-dim).
+2. **document-api/** - A CPU-based API orchestration service that handles PDF ingestion, querying, and response generation. Communicates with the VLM service over HTTP.
+
+The system uses Qdrant for vector search, Supabase for image storage, and Claude Sonnet 4 for response generation.
 
 ### Ingestion
-During the ingestion process, the application converts PDFs into JPEGs using the Python **pdf2image** library. These images are then uploaded to Supabase storage and indexed using Qdrant. To extract embeddings from the images, the application utilizes ColQwen 2.5.
+During the ingestion process, the Document API converts PDFs into JPEGs using **pdf2image**. These images are sent to the VLM service for embedding generation, then uploaded to Supabase storage and indexed in Qdrant.
 
 ![ingestion](assets/ingestion.png)
 
 ### Inference
-At inference time, the application queries the Qdrant collection using the ColQwen 2.5 embeddings of the query. It returns the top-k results (images) from the collection. Note that Qdrant stores references to the images, not the images themselves. The application fetches these images from Supabase and uses them with a multimodal model (Claude Sonnet 4) to generate the response.
+At inference time, the query is sent to the VLM service for embedding, then Qdrant returns the top-k matching document pages (filtered by session_id). The Document API fetches the corresponding images from Supabase and sends them with the query to Claude Sonnet 4 for response generation.
 
 ![inference](assets/inference.png)
 
+## Supported Models
+
+| Model | Library | Dimensions | Best for |
+|-------|---------|-----------|----------|
+| **ColQwen2.5** (default) | `colpali_engine` | 128 | Standard document retrieval |
+| **ColQwen3** | `colpali_engine` | 320 | Enhanced performance |
+| **TomoroAI ColQwen3** | `transformers` | 320 | SOTA performance, smaller storage footprint |
 
 ## Stack
+
+### VLM Service (`colpali-vlm/`)
+* [PyTorch](https://pytorch.org/) + CUDA
+* [colpali-engine](https://github.com/illuin-tech/colpali) (ColQwen2.5/ColQwen3)
+* [transformers](https://huggingface.co/docs/transformers) (TomoroAI)
+* [FastAPI](https://fastapi.tiangolo.com/)
+
+### Document API (`document-api/`)
+* [httpx](https://www.python-httpx.org/) + [tenacity](https://tenacity.readthedocs.io/) (VLM client with retry)
+* [Instructor](https://python.useinstructor.com/) (structured LLM output)
+* [Qdrant](https://qdrant.tech/) (vector search)
+* [Supabase](https://supabase.com/) (image storage)
+* [FastAPI](https://fastapi.tiangolo.com/)
+* [PyJWT](https://pyjwt.readthedocs.io/) (authentication)
+* [SlowAPI](https://github.com/laurentS/slowapi) (rate limiting)
+
+### Common
 * Programming Language: [Python 3.12.8](https://www.python.org/)
-* ColPali: [colpali-engine](https://github.com/illuin-tech/colpali)
-* LLM Framework: [Instructor](https://python.useinstructor.com/)
-* VectorDB: [Qdrant](https://qdrant.tech/)
-* Storage: [Supabase](https://supabase.com/)
-* Framework: [FastAPI 0.115.8](https://fastapi.tiangolo.com/)
-* Authentication: [PyJWT](https://pyjwt.readthedocs.io/) (Supabase JWT validation)
-* Rate Limiting: [SlowAPI](https://github.com/laurentS/slowapi)
 * Dependency & Package Manager: [uv](https://docs.astral.sh/uv/)
 * Linters: [Ruff](https://docs.astral.sh/ruff/)
 * Type Checking: [MyPy](https://mypy-lang.org/)
@@ -50,122 +72,162 @@ git clone https://github.com/jjovalle99/colpali-rag-app.git
 cd colpali-rag-app
 ```
 
-2. **Copy the `.env.example` file to `.env` and replace placeholder values with the required credentials**:
+2. **Copy the `.env.example` files and replace placeholder values with the required credentials:**
+
 ```shell
-cp .env.example .env
+# VLM service configuration
+cp colpali-vlm/.env.example colpali-vlm/.env
+
+# Document API configuration
+cp document-api/.env.example document-api/.env
 ```
 
-**Required variables:**
+**VLM service variables (`colpali-vlm/.env`):**
 ```bash
-# RAG
+# Model Configuration
+COLPALI_MODEL_NAME=vidore/colqwen2.5-v0.2
+COLPALI_MODEL_TYPE=auto
+COLPALI_VECTOR_DIM=128
+
+# Concurrency & Timeouts
+MAX_CONCURRENT_INFERENCES=1
+INFERENCE_TIMEOUT_SECONDS=60
+
+# Server
+WORKERS=1
+HOST=0.0.0.0
+PORT=8000
+
+# Authentication (optional, disabled by default)
+AUTH_ENABLED=false
+```
+
+**Document API variables (`document-api/.env`):**
+```bash
+# VLM Service Connection (Required)
+VLM_SERVICE_URL=http://localhost:8001
+VLM_TIMEOUT_SECONDS=120
+
+# Qdrant (Required)
 QDRANT_URL=fillme
 QDRANT_API_KEY=fillme
 COLLECTION_NAME=fillme
+VECTOR_DIM=128                  # Must match VLM: 128 for ColQwen2.5, 320 for ColQwen3/TomoroAI
 
-# STORAGE
+# Supabase (Required)
 SUPABASE_URL=fillme
 SUPABASE_KEY=fillme
+SUPABASE_JWT_SECRET=fillme      # Required if AUTH_ENABLED=true
+BUCKET=colpali
 
-# ANTHROPIC
+# Anthropic (Required)
 ANTHROPIC_API_KEY=fillme
-```
-
-**Optional variables (with defaults):**
-```bash
-# Authentication (set AUTH_ENABLED=false to disable)
-AUTH_ENABLED=true
-SUPABASE_JWT_SECRET=your-jwt-secret  # Required if AUTH_ENABLED=true
-
-# LLM Configuration
 DEFAULT_MODEL=claude-sonnet-4-20250514
-MAX_TOKENS=8192
 
-# Rate Limiting
+# Optional
+AUTH_ENABLED=true
+MAX_FILE_SIZE_MB=50
 QUERY_RATE_LIMIT=30/minute
 INGEST_RATE_LIMIT=10/minute
-
-# Processing Limits
-MAX_FILE_SIZE_MB=50
-MAX_PDF_PAGES=200
-
-# Timeouts
-INGEST_ENDPOINT_TIMEOUT_SECONDS=600
-QUERY_ENDPOINT_TIMEOUT_SECONDS=180
-QDRANT_TIMEOUT_SECONDS=60
-SUPABASE_TIMEOUT_SECONDS=120
-ANTHROPIC_TIMEOUT_SECONDS=180
-PDF_CONVERSION_TIMEOUT_SECONDS=120
-COLPALI_INFERENCE_TIMEOUT_SECONDS=60
 ```
-
-3. **Create your (empty) Qdrant collection**
-```shell
-make create_collection
-```
-It is configured to use `uv` (`uv run`) but the command is just doing `python scripts/create_collection.py`. If you are not using `uv` you will need to activate
-your environment and then use `python scripts/create_collection.py`
 
 ## Installation and Usage
 
-There are two ways to run the application: using Docker or running it locally in the shell.
+There are two ways to run the application: using Docker Compose or running both services locally.
 
-### Using `Docker`
+### Using Docker Compose
 
 1. **Ensure Docker is installed on your machine.** For more information, visit the official [Docker documentation](https://docs.docker.com/).
 
-2. **Build the Docker image:**
+2. **Build and start both services:**
 
    ```shell
-   make docker_build
+   make docker_up
    ```
-   **Note**: The Docker image is about 2.1GB in size. For GPU deployment with pre-downloaded model and Flash Attention 2, use `make docker_build_runpod` (~12GB).
+   **Note**: On first startup, the VLM service will download the model (~4GB). Subsequent starts use the cached volume.
 
-3. **Run the Docker container:**
+3. **Access the application docs:**
+   - Document API: [http://localhost:8000/docs](http://localhost:8000/docs)
+   - VLM Service: [http://localhost:8001/docs](http://localhost:8001/docs)
 
+4. **View logs:**
    ```shell
-    make docker_run
-    ```
-    **Note:** This will work only if you have the required credentials in the `.env` file.    
-    **Note:** You can inspect the running container by running `make docker_logs`.
-
-4. **Access the application docs.** Visit the app docs at [http://localhost:8000/docs](http://localhost:8000/docs). If everything is working correctly, you'll see the UI.
-
-5. **Stop the Docker container:**
-
-   ```shell
-   make docker_stop
+   make docker_logs
    ```
 
-### Running Locally in the Shell
+5. **Stop both services:**
+   ```shell
+   make docker_down
+   ```
+
+### Running Locally
 
 1. **Install `uv` by following the instructions** [here](https://docs.astral.sh/uv/getting-started/installation/).
 
 2. **Install poppler-utils:**
-
 ```shell
 sudo apt-get install poppler-utils
 ```
 
-3. **Install the dependencies and package:**
-
+3. **Install dependencies for both services:**
 ```shell
-uv sync --all-groups
+cd colpali-vlm && uv sync && cd ..
+cd document-api && uv sync && cd ..
 ```
 
-4. **Start the API:**
+4. **Start the VLM service (terminal 1, requires GPU):**
+```shell
+make dev_vlm    # Runs on port 8001
+```
 
-   ```shell
-   make dev
-   ```
-    **Note:** This will work only if you have the required credentials in the `.env` file.
+5. **Start the Document API (terminal 2):**
+```shell
+make dev_api    # Runs on port 8000, connects to VLM on 8001
+```
 
-5. **Access the application and database.** Visit the default app path at [http://localhost:8000](http://localhost:8000). If everything is working correctly, you'll see the UI.
+6. **Access the application:**
+   - Document API: [http://localhost:8000/docs](http://localhost:8000/docs)
+   - VLM Service: [http://localhost:8001/docs](http://localhost:8001/docs)
 
-6. **Stop the application and background services.** Terminate the processes you (this may involve using `Ctrl+C` in the terminal)
+## Docker Images
+
+The VLM service has three Dockerfiles optimized for different use cases:
+
+| Dockerfile | Size | Model Loading | Use Case |
+|-----------|------|---------------|----------|
+| `Dockerfile.colpali2_5` | ~4GB | Runtime download | Development (ColQwen2.5) |
+| `Dockerfile.tomoro-colqwen3` | ~10GB | Runtime download | Development (TomoroAI) |
+| `Dockerfile.runpod` | ~15GB | Baked into image | Production (RunPod) |
+
+The Document API has one lightweight Dockerfile (~500MB, CPU-only).
+
+### RunPod Deployment (GPU Cloud)
+
+For production GPU deployment on RunPod:
+
+1. **Build the RunPod-optimized VLM image:**
+```shell
+make docker_build_vlm_runpod
+```
+
+2. **Push to Docker Hub:**
+```shell
+export DOCKERHUB_USERNAME=your-username
+docker login
+make docker_push_vlm_runpod
+```
+
+3. **Build and push the API image:**
+```shell
+make docker_build_api
+make docker_push_api
+```
+
+4. **Deploy on RunPod** - See [docs/deployment.md](docs/deployment.md) for detailed instructions.
 
 ### Flash Attention 2 (Optional)
 
-The application automatically uses [Flash Attention 2](https://github.com/Dao-AILab/flash-attention) when available, which significantly speeds up the ColQwen2.5 model inference. If Flash Attention 2 is not installed, the application falls back to standard attention.
+The VLM service automatically uses [Flash Attention 2](https://github.com/Dao-AILab/flash-attention) when available, which significantly speeds up model inference. Flash Attention only applies to the VLM service (GPU). If not installed, it falls back to standard attention.
 
 **Requirements:**
 - Linux (native or WSL2)
@@ -200,83 +262,60 @@ The application automatically uses [Flash Attention 2](https://github.com/Dao-AI
 
 If WSL2 runs out of memory during compilation or model loading, configure `.wslconfig` to allocate more RAM.
 
-### RunPod Deployment (GPU Cloud)
-
-For production GPU deployment, the app can be deployed to RunPod with pre-downloaded model weights and **Flash Attention 2** pre-compiled for optimal inference performance.
-
-1. **Set up GitHub Secrets** for automated builds:
-   - `DOCKERHUB_USERNAME` - Your Docker Hub username
-   - `DOCKERHUB_TOKEN` - Docker Hub access token
-
-2. **Push to main** - GitHub Actions will automatically build and push the GPU-optimized image:
-   ```shell
-   git push origin main
-   # Image pushed to: your-username/colpali-rag-app:latest
-   ```
-
-3. **Deploy on RunPod**:
-   - Go to RunPod Console → Pods → Deploy
-   - Select GPU with 16GB+ VRAM (RTX 4000 Ada, A4000, RTX 4090, etc.)
-   - Image: `your-dockerhub-username/colpali-rag-app:latest`
-   - HTTP Port: `8000`
-   - Set environment variables (same as `.env`)
-
-4. **Manual build** (if needed):
-   ```shell
-   make docker_build_runpod
-   export DOCKERHUB_USERNAME=your-username
-   make docker_push_runpod
-   ```
-
-See [docs/deployment.md](docs/deployment.md) for detailed instructions.
-
 ## Structure
 ```shell
-├── .env.example
-├── .github
-│   └── workflows
-│       └── docker-build.yml
-├── Dockerfile
-├── Dockerfile.runpod
-├── Makefile
-├── README.md
-├── runpod.template.json
-├── assets
-├── prompts
-│   ├── response_1
-│   └── response_2
-├── pyproject.toml
-├── pyrightconfig.json
-├── scripts
-│   └── create_collection.py
-├── server.py
-├── src
-│   └── app
-│       ├── __init__.py
-│       ├── api
-│       │   ├── __init__.py
-│       │   ├── dependencies.py
-│       │   ├── endpoints
-│       │   │   ├── __init__.py
-│       │   │   ├── pdf_ingest.py
-│       │   │   └── query.py
-│       │   ├── lifespan.py
-│       │   └── state.py
-│       ├── colpali
-│       │   ├── __init__.py
-│       │   └── loaders.py
-│       ├── models
-│       │   ├── __init__.py
-│       │   └── query_response.py
-│       ├── services
-│       │   ├── __init__.py
-│       │   ├── img_downloader.py
-│       │   └── img_uploader.py
-│       ├── settings.py
-│       └── utils
-│           ├── __init__.py
-│           ├── prompt_utils.py
-│           └── qdrant_utils.py
-├── test.ipynb
-└── uv.lock
+colpali-rag-app/
+├── colpali-vlm/                        # VLM microservice (GPU)
+│   ├── src/vlm/
+│   │   ├── api/
+│   │   │   ├── endpoints/embed.py      # /embed/images, /embed/query
+│   │   │   ├── lifespan.py             # Model loading
+│   │   │   ├── dependencies.py         # FastAPI DI
+│   │   │   └── auth.py                 # JWT authentication
+│   │   ├── colpali/loaders.py          # Multi-model loader factory
+│   │   ├── logging_config.py
+│   │   └── settings.py
+│   ├── server.py
+│   ├── pyproject.toml
+│   ├── Dockerfile.colpali2_5           # Dev: ColQwen2.5 (~4GB)
+│   ├── Dockerfile.tomoro-colqwen3      # Dev: TomoroAI (~10GB)
+│   ├── Dockerfile.runpod               # Prod: baked-in models (~15GB)
+│   └── Makefile
+│
+├── document-api/                       # Document API microservice (CPU)
+│   ├── src/doc_api/
+│   │   ├── api/
+│   │   │   ├── endpoints/
+│   │   │   │   ├── pdf_ingest.py       # PDF ingestion
+│   │   │   │   └── query.py            # Document query
+│   │   │   ├── lifespan.py             # Client initialization
+│   │   │   ├── dependencies.py         # FastAPI DI
+│   │   │   ├── auth.py                 # JWT authentication
+│   │   │   ├── state.py                # Client factories
+│   │   │   ├── middleware.py            # Timeout middleware
+│   │   │   └── rate_limit.py           # Rate limiting
+│   │   ├── services/
+│   │   │   ├── vlm_client.py           # HTTP client for VLM service
+│   │   │   ├── img_uploader.py
+│   │   │   └── img_downloader.py
+│   │   ├── models/
+│   │   │   └── query_response.py
+│   │   ├── utils/
+│   │   │   ├── prompt_utils.py
+│   │   │   └── qdrant_utils.py
+│   │   ├── logging_config.py
+│   │   └── settings.py
+│   ├── server.py
+│   ├── pyproject.toml
+│   ├── Dockerfile
+│   ├── Makefile
+│   └── prompts/
+│       ├── response_1
+│       └── response_2
+│
+├── docker-compose.yml                  # Dev: both services
+├── docker-compose.runpod.yml           # RunPod: VLM with baked-in models + API
+├── scripts/
+│   └── get_token.py
+└── Makefile                            # Root-level commands
 ```

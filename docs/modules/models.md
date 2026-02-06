@@ -2,10 +2,12 @@
 
 The models module contains Pydantic data models for API requests and responses.
 
+**Location:** `document-api/src/doc_api/models/`
+
 ## Module Structure
 
 ```
-src/app/models/
+document-api/src/doc_api/models/
 ├── __init__.py
 └── query_response.py    # Query response models
 ```
@@ -42,7 +44,7 @@ Represents a cited document reference.
 ```python
 class Reference(BaseModel):
     id: int = Field(
-        description="Sequential numeric identifier for the reference, starting from 1, used for citations in the answer"
+        description="Sequential numeric identifier for the reference, starting from 1"
     )
     title: str
     filename: str
@@ -54,64 +56,31 @@ class Reference(BaseModel):
 | `title` | `str` | Section or page title |
 | `filename` | `str` | Source document filename |
 
-**Example:**
-```json
-{
-  "id": 1,
-  "title": "Executive Summary",
-  "filename": "annual_report.pdf"
-}
-```
-
 ---
 
 ### FinalResponse Class
 
-Complete response model with references and answer.
-
-```mermaid
-classDiagram
-    class FinalResponse {
-        +references: list[Reference | dict]
-        +answer: str
-        +model_dump_json() str
-    }
-
-    class Reference {
-        +id: int
-        +title: str
-        +filename: str
-    }
-
-    FinalResponse --> Reference : contains
-```
+Complete response model with references and answer. Designed for streaming with Instructor's `create_partial()`.
 
 ```python
 class FinalResponse(BaseModel):
     model_config = ConfigDict(validate_assignment=True)
 
     references: list[Reference | dict[str, Any]] = Field(
-        description="List of unique reference entries indicating where the supporting information was found."
+        description="List of unique reference entries"
     )
     answer: str = Field(
-        description="The complete answer text based solely on the provided context. The answer must include in-text citations in the format [id] corresponding to the references."
+        description="The complete answer text with in-text citations [id]"
     )
 
     @field_serializer("references")
-    def serialize_references(
-        self, refs: list[Reference | dict[str, Any]] | None, _info
-    ) -> list[dict[str, Any]]:
-        """Serialize references, handling both complete Reference objects and partial dicts during streaming."""
+    def serialize_references(self, refs, _info):
         if refs is None:
             return []
-        result = []
-        for ref in refs:
-            if isinstance(ref, Reference):
-                result.append(ref.model_dump())
-            else:
-                # During streaming, instructor may provide partial dicts
-                result.append(ref)
-        return result
+        return [
+            ref.model_dump() if isinstance(ref, Reference) else ref
+            for ref in refs
+        ]
 ```
 
 | Field | Type | Description |
@@ -119,80 +88,20 @@ class FinalResponse(BaseModel):
 | `references` | `list[Reference \| dict]` | Cited document references |
 | `answer` | `str` | Response text with `[1]`, `[2]` citations |
 
+The custom serializer handles both complete `Reference` objects and partial dicts during streaming.
+
 ---
 
 ### Streaming Support
-
-The `FinalResponse` model is designed to work with Instructor's streaming capability.
-
-```mermaid
-sequenceDiagram
-    participant Claude as Claude API
-    participant Instructor
-    participant Model as FinalResponse
-
-    Note over Claude,Model: Streaming Partial Responses
-
-    Claude-->>Instructor: {"references": [], "answer": "The"}
-    Instructor->>Model: Parse partial
-    Model-->>Instructor: FinalResponse(partial)
-
-    Claude-->>Instructor: {"references": [], "answer": "The report"}
-    Instructor->>Model: Parse partial
-    Model-->>Instructor: FinalResponse(partial)
-
-    Claude-->>Instructor: {"references": [{"id": 1, ...}], "answer": "The report shows [1]..."}
-    Instructor->>Model: Parse complete
-    Model-->>Instructor: FinalResponse(complete)
-```
 
 During streaming, references may be:
 - Empty list (`[]`)
 - Partial dictionaries (`{"id": 1}`)
 - Complete Reference objects
 
-The custom serializer handles all these cases:
-
-```python
-@field_serializer("references")
-def serialize_references(self, references):
-    return [
-        ref.model_dump() if isinstance(ref, Reference) else ref
-        for ref in references
-    ]
-```
-
----
-
-### Example Responses
-
-#### Complete Response
-
-```json
-{
-  "references": [
-    {
-      "id": 1,
-      "title": "Financial Overview",
-      "filename": "q4_report.pdf"
-    },
-    {
-      "id": 2,
-      "title": "Market Analysis",
-      "filename": "market_study.pdf"
-    }
-  ],
-  "answer": "Revenue increased by 15% in Q4 [1]. This growth was driven primarily by expansion in the Asian market, which saw a 25% increase in sales [2]."
-}
-```
-
-#### Streaming Chunks
-
 ```json
 {"references": [], "answer": "Revenue"}
-{"references": [], "answer": "Revenue increased"}
 {"references": [], "answer": "Revenue increased by 15%"}
-{"references": [{"id": 1}], "answer": "Revenue increased by 15% in Q4 [1]"}
 {"references": [{"id": 1, "title": "Financial Overview", "filename": "q4_report.pdf"}], "answer": "Revenue increased by 15% in Q4 [1]."}
 ```
 
@@ -207,7 +116,7 @@ graph LR
     end
 
     subgraph Processing["LLM Processing"]
-        Claude["Claude Sonnet 3.7"]
+        Claude["Claude Sonnet 4"]
         Instructor["Instructor"]
     end
 
@@ -226,10 +135,8 @@ graph LR
 
 ## Usage Example
 
-### Creating a Response
-
 ```python
-from src.app.models.query_response import Reference, FinalResponse
+from doc_api.models.query_response import Reference, FinalResponse
 
 # Create references
 refs = [
@@ -245,82 +152,4 @@ response = FinalResponse(
 
 # Serialize to JSON
 json_str = response.model_dump_json()
-```
-
-### With Instructor Streaming
-
-```python
-async for partial in instructor_client.chat.completions.create_partial(
-    model="claude-sonnet-4-20250514",
-    messages=messages,
-    response_model=FinalResponse,
-    stream=True,
-):
-    # partial is a FinalResponse with potentially incomplete data
-    print(partial.model_dump_json())
-```
-
----
-
-## Validation
-
-Pydantic provides automatic validation:
-
-```python
-# Valid
-response = FinalResponse(
-    references=[{"id": 1, "title": "Test", "filename": "test.pdf"}],
-    answer="Test answer [1]."
-)
-
-# Invalid - will raise ValidationError
-response = FinalResponse(
-    references=[{"id": "not_an_int"}],  # id must be int
-    answer="Test"
-)
-```
-
----
-
-## Schema Export
-
-Get the JSON Schema for OpenAPI documentation:
-
-```python
-print(FinalResponse.model_json_schema())
-```
-
-```json
-{
-  "properties": {
-    "references": {
-      "items": {
-        "anyOf": [
-          {"$ref": "#/$defs/Reference"},
-          {"type": "object"}
-        ]
-      },
-      "title": "References",
-      "type": "array"
-    },
-    "answer": {
-      "title": "Answer",
-      "type": "string"
-    }
-  },
-  "required": ["references", "answer"],
-  "title": "FinalResponse",
-  "type": "object",
-  "$defs": {
-    "Reference": {
-      "properties": {
-        "id": {"title": "Id", "type": "integer"},
-        "title": {"title": "Title", "type": "string"},
-        "filename": {"title": "Filename", "type": "string"}
-      },
-      "required": ["id", "title", "filename"],
-      "type": "object"
-    }
-  }
-}
 ```

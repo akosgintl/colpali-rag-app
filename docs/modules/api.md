@@ -1,485 +1,211 @@
 # API Module
 
-The API module contains the FastAPI application setup, endpoints, lifecycle management, and dependency injection.
+The API module is split across two services, each with their own endpoints, lifecycle management, and dependency injection.
 
-## Module Structure
+## VLM Service API (`colpali-vlm/src/vlm/api/`)
 
 ```
-src/app/api/
+src/vlm/api/
 ├── __init__.py
 ├── auth.py           # JWT authentication
-├── state.py          # Client factory functions
-├── lifespan.py       # Application lifecycle manager
+├── lifespan.py       # Model loading lifecycle
 ├── dependencies.py   # FastAPI dependency injection
-├── middleware.py     # Timeout middleware
-├── rate_limit.py     # Rate limiting setup
 └── endpoints/
-    ├── __init__.py
-    ├── pdf_ingest.py # PDF ingestion endpoint
-    └── query.py      # Query endpoint
+    └── embed.py      # /embed/images, /embed/query
 ```
 
-## Component Diagram
-
-```mermaid
-graph TD
-    subgraph api["api/"]
-        state["state.py"]
-        lifespan["lifespan.py"]
-        deps["dependencies.py"]
-
-        subgraph endpoints["endpoints/"]
-            ingest["pdf_ingest.py"]
-            query["query.py"]
-        end
-    end
-
-    subgraph external["External Clients"]
-        qdrant["Qdrant"]
-        supabase["Supabase"]
-        anthropic["Anthropic"]
-    end
-
-    state --> qdrant
-    state --> supabase
-    state --> anthropic
-    lifespan --> state
-    deps --> lifespan
-    ingest --> deps
-    query --> deps
-```
-
----
-
-## state.py - Client Factories
-
-Factory functions for creating async clients.
-
-### Functions
-
-#### `create_qdrant_client(settings: Settings) -> AsyncQdrantClient`
-
-Creates an async Qdrant client with connection pool configuration.
+### server.py (Entry Point)
 
 ```python
-def create_qdrant_client(settings: Settings) -> AsyncQdrantClient:
-    # Configure httpx limits for connection pooling
-    limits = httpx.Limits(
-        max_connections=20,
-        max_keepalive_connections=10,
-    )
-
-    return AsyncQdrantClient(
-        url=settings.qdrant.qdrant_url,
-        api_key=settings.qdrant.qdrant_api_key,
-        timeout=settings.timeout.qdrant_timeout_seconds,
-        limits=limits,
-    )
+# colpali-vlm/server.py
+app = FastAPI(
+    title="ColPali VLM Service",
+    description="Vision Language Model embedding service",
+    lifespan=lifespan,
+)
+app.include_router(embed.router)
 ```
 
-**Parameters:**
-- `settings`: Root Settings object
+Health endpoints (`/health`, `/health/detailed`) are defined directly in `server.py`.
 
-**Returns:** AsyncQdrantClient instance
+### lifespan.py - Model Loading
 
----
-
-#### `create_supabase_client(settings: Settings) -> SupabaseAsyncClient`
-
-Creates a Supabase async client.
-
-```python
-def create_supabase_client(settings: Settings) -> SupabaseAsyncClient:
-    return SupabaseAsyncClient(
-        supabase_key=settings.supabase.supabase_key,
-        supabase_url=settings.supabase.supabase_url,
-    )
-```
-
-**Parameters:**
-- `settings`: Root Settings object
-
-**Returns:** Supabase AsyncClient instance
-
----
-
-#### `create_anthropic_client(settings: Settings) -> AsyncAnthropic`
-
-Creates an async Anthropic client with timeout configuration.
-
-```python
-def create_anthropic_client(settings: Settings) -> AsyncAnthropic:
-    # Configure httpx client with timeout
-    http_client = httpx.AsyncClient(
-        timeout=httpx.Timeout(float(settings.timeout.anthropic_timeout_seconds)),
-        limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
-    )
-
-    return AsyncAnthropic(
-        api_key=settings.anthropic.anthropic_api_key,
-        http_client=http_client,
-    )
-```
-
-**Parameters:**
-- `settings`: Root Settings object
-
-**Returns:** AsyncAnthropic instance
-
----
-
-## lifespan.py - Lifecycle Manager
-
-Manages application startup and shutdown.
-
-### State TypedDict
+Loads the ColPali model and processor on startup using the `get_loader()` factory.
 
 ```python
 class State(TypedDict):
-    model: ColQwen2_5
-    processor: ColQwen2_5_Processor
+    model: Any
+    processor: Any
+    model_semaphore: asyncio.Semaphore
+    device: str
+    model_name: str
+    model_type: str
+    settings: Any
+```
+
+The lifespan:
+1. Loads settings
+2. Creates loader via `get_loader(model_type, model_name)`
+3. Loads model and processor
+4. Creates model semaphore for concurrency control
+
+### dependencies.py
+
+| Function | Returns |
+|----------|---------|
+| `get_model` | Model instance |
+| `get_processor` | Processor instance |
+| `get_semaphore` | `asyncio.Semaphore` |
+| `get_device` | Device string (cuda/mps/cpu) |
+| `get_model_name` | Model name string |
+| `get_settings_from_state` | `Settings` |
+
+### auth.py
+
+JWT authentication using Supabase tokens. Disabled by default (`AUTH_ENABLED=false`).
+
+### endpoints/embed.py
+
+**POST /embed/images**
+- Accepts `list[UploadFile]` images
+- Loads into PIL, processes through model
+- Returns `EmbeddingResponse` with multi-vectors
+- Protected by model semaphore and inference timeout
+
+**POST /embed/query**
+- Accepts `QueryEmbedRequest` with query string
+- Processes through model (handles both `process_texts` and `process_queries` APIs)
+- Returns `QueryEmbeddingResponse` with multi-vector
+
+Both endpoints handle TomoroAI output format (`.embeddings` attribute) automatically.
+
+---
+
+## Document API (`document-api/src/doc_api/api/`)
+
+```
+src/doc_api/api/
+├── __init__.py
+├── auth.py           # JWT authentication
+├── state.py          # Client factory functions
+├── lifespan.py       # Client initialization lifecycle
+├── dependencies.py   # FastAPI dependency injection
+├── middleware.py      # Timeout middleware
+├── rate_limit.py      # Rate limiting setup
+└── endpoints/
+    ├── __init__.py
+    ├── pdf_ingest.py  # PDF ingestion endpoint
+    └── query.py       # Query endpoint
+```
+
+### server.py (Entry Point)
+
+```python
+# document-api/server.py
+app = FastAPI(
+    title="Document API",
+    description="Document ingestion and query API with VLM-powered retrieval",
+    lifespan=lifespan,
+)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(TimeoutMiddleware, endpoint_timeouts={...})
+app.add_middleware(CORSMiddleware, allow_origins=settings.auth.allowed_origins, ...)
+app.include_router(pdf_ingest.router)
+app.include_router(query.router)
+```
+
+### state.py - Client Factories
+
+Factory functions for creating async clients:
+
+| Function | Returns | Description |
+|----------|---------|-------------|
+| `create_qdrant_client(settings)` | `AsyncQdrantClient` | With connection pooling (20 max, 10 keepalive) |
+| `create_supabase_client(settings)` | `SupabaseAsyncClient` | With httpx timeout config |
+| `create_anthropic_client(settings)` | `AsyncAnthropic` | With httpx timeout config |
+
+### lifespan.py - Client Initialization
+
+```python
+class State(TypedDict):
+    vlm_client: VLMClient
     supabase_uploader: SupabaseJPEGUploader
     supabase_downloader: SupabaseJPEGDownloader
     instructor_client: AsyncInstructor
     qdrant_client: AsyncQdrantClient
     collection_name: str
-    model_semaphore: asyncio.Semaphore   # Concurrency control for GPU
-    qdrant_semaphore: asyncio.Semaphore  # Concurrency control for Qdrant
-    llm_config: dict[str, Any]           # LLM configuration
-    settings: Settings                    # Application settings
+    qdrant_semaphore: asyncio.Semaphore
+    llm_config: dict[str, Any]
+    settings: Any
 ```
 
-### Lifecycle Flow
+The lifespan:
+1. Creates `VLMClient` and waits for VLM service health (retry 30 attempts, exponential backoff 2-30s)
+2. Creates Qdrant, Anthropic, and Supabase clients
+3. Creates Instructor client from Anthropic
+4. Creates uploader/downloader services
+5. Creates Qdrant semaphore (10 concurrent)
+6. Loads LLM config (model, max_tokens, temperature)
 
-```mermaid
-sequenceDiagram
-    participant App as FastAPI
-    participant Life as lifespan()
-    participant Clients as Clients
-    participant Model as ColQwen2.5
+On shutdown: closes VLM client, Qdrant client, and Anthropic client.
 
-    Note over Life: Startup Phase
-
-    Life->>Life: Load settings
-    Life->>Clients: Create Qdrant client
-    Life->>Clients: Create Anthropic client
-    Life->>Clients: Create Supabase client
-    Life->>Life: Wrap with Instructor
-    Life->>Life: Create uploader/downloader
-    Life->>Model: Load model & processor
-
-    Life->>App: yield State
-
-    Note over Life: Running Phase
-    App->>App: Handle requests
-
-    Note over Life: Shutdown Phase
-    Life->>Clients: Close Qdrant client
-    Life->>Clients: Close Anthropic client
-```
-
-### Function
-
-#### `lifespan(app: FastAPI) -> AsyncGenerator[State, None]`
-
-Async context manager for application lifecycle.
-
-```python
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[State, None]:
-    # Startup
-    settings = get_settings()
-    qdrant_client = create_qdrant_client(settings.qdrant)
-    anthropic_client = create_anthropic_client(settings.anthropic)
-    supabase_client = await create_supabase_client(settings.supabase)
-
-    instructor_client = instructor.from_anthropic(anthropic_client)
-
-    uploader = SupabaseJPEGUploader(supabase_client, settings.supabase.bucket)
-    downloader = SupabaseJPEGDownloader(supabase_client, settings.supabase.bucket)
-
-    loader = ColQwen2_5Loader(settings.colpali.colpali_model_name)
-    model, processor = loader.load()
-
-    yield {
-        "model": model,
-        "processor": processor,
-        "supabase_uploader": uploader,
-        "supabase_downloader": downloader,
-        "instructor_client": instructor_client,
-        "qdrant_client": qdrant_client,
-        "collection_name": settings.qdrant.collection_name,
-    }
-
-    # Shutdown
-    await qdrant_client.close()
-    await anthropic_client.close()
-```
-
----
-
-## dependencies.py - Dependency Injection
-
-FastAPI dependency functions for accessing shared state.
-
-### Dependency Flow
-
-```mermaid
-graph LR
-    subgraph Request["Request"]
-        R["request.state"]
-    end
-
-    subgraph Dependencies["Dependencies"]
-        D1["get_qdrant_client"]
-        D2["get_colpali_model"]
-        D3["get_colpali_processor"]
-        D4["get_supabase_uploader"]
-        D5["get_supabase_downloader"]
-        D6["get_collection_name"]
-        D7["get_instructor_client"]
-        D8["get_prompts"]
-    end
-
-    R --> D1
-    R --> D2
-    R --> D3
-    R --> D4
-    R --> D5
-    R --> D6
-    R --> D7
-```
-
-### Functions
-
-All dependency functions follow the same pattern:
-
-```python
-async def get_qdrant_client(request: Request) -> AsyncQdrantClient:
-    return request.state.qdrant_client
-```
+### dependencies.py
 
 | Function | Returns | Source |
 |----------|---------|--------|
+| `get_vlm_client` | `VLMClient` | `request.state.vlm_client` |
 | `get_qdrant_client` | `AsyncQdrantClient` | `request.state.qdrant_client` |
-| `get_colpali_model` | `ColQwen2_5` | `request.state.model` |
-| `get_colpali_processor` | `ColQwen2_5_Processor` | `request.state.processor` |
 | `get_supabase_uploader` | `SupabaseJPEGUploader` | `request.state.supabase_uploader` |
 | `get_supabase_downloader` | `SupabaseJPEGDownloader` | `request.state.supabase_downloader` |
 | `get_collection_name` | `str` | `request.state.collection_name` |
 | `get_instructor_client` | `AsyncInstructor` | `request.state.instructor_client` |
-| `get_model_semaphore` | `asyncio.Semaphore` | `request.state.model_semaphore` |
 | `get_qdrant_semaphore` | `asyncio.Semaphore` | `request.state.qdrant_semaphore` |
 | `get_llm_config` | `dict[str, Any]` | `request.state.llm_config` |
 | `get_settings_from_state` | `Settings` | `request.state.settings` |
-| `get_current_user` | `dict \| None` | JWT token validation |
+| `get_prompts` | `dict[str, str]` | Cached prompt file loading |
+| `get_auth_token` | `str \| None` | Authorization header extraction |
 
-### Cached Dependency
+### auth.py
 
-#### `get_prompts() -> dict[str, str]`
+JWT authentication using Supabase tokens. Enabled by default (`AUTH_ENABLED=true`).
 
-Loads prompts from files (cached with `@lru_cache`).
+`SupabaseAuthValidator` validates JWT structure, audience (`authenticated`), and expiration.
 
-```python
-@lru_cache(maxsize=1)
-def get_prompts():
-    logger.info("Loading prompts (cached)")
-    prompt1 = read_prompt_from_plain_file("prompts/response_1")
-    prompt2 = read_prompt_from_plain_file("prompts/response_2")
-    return {"prompt1": prompt1, "prompt2": prompt2}
-```
+### middleware.py - TimeoutMiddleware
 
-**Returns:** Dict with `prompt1` and `prompt2` keys
+Applies per-endpoint timeouts:
+- `/ingest-pdfs/`: 600s (default)
+- `/query/`: 180s (default)
+- Other endpoints: falls back to ingest timeout
 
----
+Returns 504 Gateway Timeout when exceeded.
 
-## endpoints/pdf_ingest.py - Ingestion Endpoint
+### rate_limit.py
 
-Handles PDF document ingestion.
+Uses SlowAPI for per-IP rate limiting:
+- `/query/`: 30 requests/minute
+- `/ingest-pdfs/`: 10 requests/minute
 
-### PDFIngestController
+### endpoints/pdf_ingest.py
 
-Controller class encapsulating ingestion logic.
+`PDFIngestController` handles ingestion:
+1. Reads PDF bytes, validates file size
+2. Converts to JPEG via `pdf2image` (300 DPI, 4 threads)
+3. Batches images (default: 5 per batch)
+4. Calls `vlm_client.embed_images()` for each batch
+5. Upserts to Qdrant via `upsert_with_retry()` (with vector_dim)
+6. Uploads to Supabase via `uploader.upload_images()`
 
-```mermaid
-classDiagram
-    class PDFIngestController {
-        -model: ColQwen2_5
-        -processor: ColQwen2_5_Processor
-        -qdrant_client: AsyncQdrantClient
-        -collection_name: str
-        -supabase_uploader: SupabaseJPEGUploader
-        -batch_size: int
+Auth token is forwarded to VLM service.
 
-        +ingest(files, session_id) IngestResponse
-        -_convert_pdf_to_images(file) List[Image]
-        -_process_images_batch(images, session_id, filename) None
-    }
-```
+### endpoints/query.py
 
-### Endpoint
+`QueryController` handles queries:
+1. Calls `vlm_client.embed_query()` for query embedding
+2. Searches Qdrant with session_id filter
+3. Downloads images from Supabase
+4. Constructs prompt with images and system prompts
+5. Streams response via Instructor's `create_partial()`
 
-#### `POST /ingest-pdfs/`
-
-```python
-@router.post("/ingest-pdfs/")
-async def ingest_pdfs(
-    files: list[UploadFile] = File(...),
-    session_id: UUID4 = Form(...),
-    model: ColQwen2_5 = Depends(get_colpali_model),
-    processor: ColQwen2_5_Processor = Depends(get_colpali_processor),
-    qdrant_client: AsyncQdrantClient = Depends(get_qdrant_client),
-    collection_name: str = Depends(get_collection_name),
-    supabase_uploader: SupabaseJPEGUploader = Depends(get_supabase_uploader),
-) -> IngestResponse:
-```
-
-### Processing Pipeline
-
-```mermaid
-sequenceDiagram
-    participant Controller
-    participant PDF as pdf2image
-    participant Model as ColQwen2.5
-    participant Qdrant
-    participant Supabase
-
-    Controller->>PDF: convert_from_bytes(300 DPI, 4 threads)
-    PDF-->>Controller: images[]
-
-    loop batch_size=1
-        Controller->>Model: processor(images)
-        Model-->>Controller: batch_features
-        Controller->>Model: model.forward(**batch_features)
-        Model-->>Controller: embeddings
-
-        Controller->>Qdrant: upsert_with_retry(points)
-        Controller->>Supabase: upload_images(images)
-    end
-```
-
-### Response Model
-
-```python
-class IngestResponse(BaseModel):
-    results: list[dict]  # [{filename, num_pages} or {filename, error}]
-```
-
----
-
-## endpoints/query.py - Query Endpoint
-
-Handles document queries with streaming responses.
-
-### QueryController
-
-Controller class encapsulating query logic.
-
-```mermaid
-classDiagram
-    class QueryController {
-        -model: ColQwen2_5
-        -processor: ColQwen2_5_Processor
-        -qdrant_client: AsyncQdrantClient
-        -collection_name: str
-        -supabase_downloader: SupabaseJPEGDownloader
-        -instructor_client: AsyncInstructor
-        -prompts: dict
-
-        +query(query, top_k, session_id) StreamingResponse
-        -_embed_query(query) Tensor
-        -_search_qdrant(embedding, session_id, top_k) List[ScoredPoint]
-        -_build_prompt(images) str
-    }
-```
-
-### Endpoint
-
-#### `POST /query/`
-
-```python
-@router.post("/query/")
-async def query(
-    query: str = Form(...),
-    top_k: int = Form(...),
-    session_id: UUID4 = Form(...),
-    model: ColQwen2_5 = Depends(get_colpali_model),
-    processor: ColQwen2_5_Processor = Depends(get_colpali_processor),
-    qdrant_client: AsyncQdrantClient = Depends(get_qdrant_client),
-    collection_name: str = Depends(get_collection_name),
-    supabase_downloader: SupabaseJPEGDownloader = Depends(get_supabase_downloader),
-    instructor_client: AsyncInstructor = Depends(get_instructor_client),
-    prompts: dict = Depends(get_prompts),
-) -> StreamingResponse:
-```
-
-### Query Flow
-
-```mermaid
-sequenceDiagram
-    participant Client
-    participant Controller
-    participant ColQwen as ColQwen2.5
-    participant Qdrant
-    participant Supabase
-    participant Claude
-
-    Client->>Controller: query, top_k, session_id
-
-    Controller->>ColQwen: Embed query
-    ColQwen-->>Controller: query_embedding
-
-    Controller->>Qdrant: query_points(filter=session_id)
-    Qdrant-->>Controller: scored_points[]
-
-    Controller->>Supabase: download_instructor_images()
-    Supabase-->>Controller: Image[]
-
-    Controller->>Claude: create_partial(FinalResponse, stream=True)
-
-    loop Streaming
-        Claude-->>Controller: partial FinalResponse
-        Controller-->>Client: SSE chunk
-    end
-```
-
-### Streaming Implementation
-
-```python
-stream = self.instructor_client.completions.create_partial(
-    model=self.llm_config["model"],
-    response_model=FinalResponse,
-    messages=[{"role": "user", "content": query_content}],
-    context={"query": query},
-    temperature=self.llm_config["temperature"],
-    max_tokens=self.llm_config["max_tokens"],
-    max_retries=3,
-)
-
-async for partial in stream:
-    yield partial.model_dump_json() + "\n"
-
-return StreamingResponse(
-    controller.query(query, top_k, session_id),
-    media_type="text/event-stream"
-)
-```
-
----
-
-## Usage Example
-
-```python
-from fastapi import FastAPI, Depends
-from src.app.api.lifespan import lifespan
-from src.app.api.dependencies import get_qdrant_client
-
-app = FastAPI(lifespan=lifespan)
-
-@app.get("/example")
-async def example(
-    qdrant_client = Depends(get_qdrant_client)
-):
-    # Use qdrant_client...
-    pass
-```
+Auth token is forwarded to VLM service.

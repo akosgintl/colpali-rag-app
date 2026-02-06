@@ -1,6 +1,6 @@
 # Architecture Overview
 
-This document describes the system architecture of the ColPali RAG App.
+This document describes the two-service architecture of the ColPali RAG App.
 
 ## High-Level Architecture
 
@@ -11,15 +11,18 @@ graph TB
         Web["Web Application"]
     end
 
-    subgraph API["FastAPI Application"]
-        Router["Router Layer"]
-        Deps["Dependency Injection"]
-        Lifespan["Lifespan Manager"]
+    subgraph DocAPI["Document API (:8000)"]
+        APIRouter["Router Layer"]
+        APIDeps["Dependency Injection"]
+        APILifespan["Lifespan Manager"]
+        VLMClient["VLM Client (httpx)"]
     end
 
-    subgraph ML["ML Layer"]
-        ColQwen["ColQwen 2.5 Model"]
-        Processor["ColQwen Processor"]
+    subgraph VLMService["VLM Service (:8001)"]
+        VLMRouter["Router Layer"]
+        VLMDeps["Dependency Injection"]
+        VLMLifespan["Lifespan Manager"]
+        Model["ColQwen2.5 / ColQwen3 / TomoroAI"]
     end
 
     subgraph External["External Services"]
@@ -28,18 +31,23 @@ graph TB
         Anthropic["Claude Sonnet 4"]
     end
 
-    CLI --> Router
-    Web --> Router
-    Router --> Deps
-    Deps --> Lifespan
-    Lifespan --> ColQwen
-    Lifespan --> Processor
-    Lifespan --> Qdrant
-    Lifespan --> Supabase
-    Lifespan --> Anthropic
+    CLI --> APIRouter
+    Web --> APIRouter
+    APIRouter --> APIDeps
+    APIDeps --> APILifespan
+    APILifespan --> VLMClient
+    VLMClient -->|HTTP| VLMRouter
+    VLMRouter --> VLMDeps
+    VLMDeps --> VLMLifespan
+    VLMLifespan --> Model
+    APILifespan --> Qdrant
+    APILifespan --> Supabase
+    APILifespan --> Anthropic
 ```
 
 ## Component Architecture
+
+### Document API Components
 
 ```mermaid
 graph TD
@@ -50,11 +58,13 @@ graph TD
 
     subgraph Dependencies["Dependencies"]
         dep1["get_qdrant_client"]
-        dep2["get_colpali_model"]
+        dep2["get_vlm_client"]
         dep3["get_instructor_client"]
+        dep4["get_auth_token"]
     end
 
     subgraph Services["Services"]
+        vlm["VLMClient"]
         uploader["SupabaseJPEGUploader"]
         downloader["SupabaseJPEGDownloader"]
     end
@@ -67,268 +77,246 @@ graph TD
     ingest --> dep1
     ingest --> dep2
     ingest --> uploader
+    ingest --> qdrant_u
     query --> dep1
     query --> dep2
     query --> dep3
     query --> downloader
-    uploader --> qdrant_u
-    downloader --> prompt
+    query --> prompt
+    vlm -->|HTTP| VLM["VLM Service"]
+```
+
+### VLM Service Components
+
+```mermaid
+graph TD
+    subgraph Endpoints["Endpoints"]
+        embed_img["/embed/images"]
+        embed_query["/embed/query"]
+        health["/health"]
+        health_detailed["/health/detailed"]
+    end
+
+    subgraph Dependencies["Dependencies"]
+        get_model["get_model"]
+        get_processor["get_processor"]
+        get_semaphore["get_semaphore"]
+    end
+
+    subgraph Loaders["Loader Factory"]
+        factory["get_loader()"]
+        colqwen25["ColQwen2_5Loader"]
+        colqwen3["ColQwen3Loader"]
+        tomoro["TomoroColQwen3Loader"]
+    end
+
+    embed_img --> get_model
+    embed_img --> get_processor
+    embed_img --> get_semaphore
+    embed_query --> get_model
+    embed_query --> get_processor
+    embed_query --> get_semaphore
+    factory --> colqwen25
+    factory --> colqwen3
+    factory --> tomoro
 ```
 
 ## Directory Structure
 
 ```
 colpali-rag-app/
-├── server.py                 # Application entry point
-├── scripts/
-│   └── create_collection.py  # Qdrant initialization
-├── prompts/
-│   ├── response_1            # System prompt part 1
-│   └── response_2            # System prompt part 2
-└── src/app/
-    ├── settings.py           # Configuration
-    ├── logging_config.py     # Logging setup
-    ├── api/
-    │   ├── state.py          # Client factories
-    │   ├── lifespan.py       # Lifecycle management
-    │   ├── dependencies.py   # DI functions
-    │   └── endpoints/
-    │       ├── pdf_ingest.py # Ingestion endpoint
-    │       └── query.py      # Query endpoint
-    ├── colpali/
-    │   └── loaders.py        # Model loading
-    ├── models/
-    │   └── query_response.py # Response models
-    ├── services/
-    │   ├── img_uploader.py   # Upload service
-    │   └── img_downloader.py # Download service
-    └── utils/
-        ├── prompt_utils.py   # Prompt loading
-        └── qdrant_utils.py   # Qdrant helpers
+├── colpali-vlm/                        # VLM microservice (GPU)
+│   ├── server.py                       # Application entry point
+│   └── src/vlm/
+│       ├── settings.py                 # Configuration
+│       ├── logging_config.py           # Logging setup
+│       ├── api/
+│       │   ├── lifespan.py             # Model loading lifecycle
+│       │   ├── dependencies.py         # DI functions
+│       │   ├── auth.py                 # JWT authentication
+│       │   └── endpoints/
+│       │       └── embed.py            # Embedding endpoints
+│       └── colpali/
+│           └── loaders.py              # Multi-model loader factory
+│
+├── document-api/                       # Document API microservice (CPU)
+│   ├── server.py                       # Application entry point
+│   ├── prompts/
+│   │   ├── response_1                  # System prompt part 1
+│   │   └── response_2                  # System prompt part 2
+│   └── src/doc_api/
+│       ├── settings.py                 # Configuration
+│       ├── logging_config.py           # Logging setup
+│       ├── api/
+│       │   ├── state.py                # Client factories
+│       │   ├── lifespan.py             # Client initialization lifecycle
+│       │   ├── dependencies.py         # DI functions
+│       │   ├── auth.py                 # JWT authentication
+│       │   ├── middleware.py            # Timeout middleware
+│       │   ├── rate_limit.py           # Rate limiting
+│       │   └── endpoints/
+│       │       ├── pdf_ingest.py       # Ingestion endpoint
+│       │       └── query.py            # Query endpoint
+│       ├── services/
+│       │   ├── vlm_client.py           # HTTP client for VLM service
+│       │   ├── img_uploader.py         # Upload service
+│       │   └── img_downloader.py       # Download service
+│       ├── models/
+│       │   └── query_response.py       # Response models
+│       └── utils/
+│           ├── prompt_utils.py         # Prompt loading
+│           └── qdrant_utils.py         # Qdrant helpers
 ```
 
 ## Application Lifecycle
+
+### VLM Service Startup
+
+```mermaid
+sequenceDiagram
+    participant App as FastAPI App
+    participant Life as Lifespan Manager
+    participant Factory as get_loader()
+    participant Model as ColPali Model
+
+    Note over App: VLM Service Startup
+    App->>Life: Enter lifespan context
+    Life->>Life: Load settings
+    Life->>Factory: get_loader(model_type, model_name)
+    Factory-->>Life: Loader instance
+    Life->>Model: loader.load()
+    Model-->>Life: (model, processor)
+    Life->>Life: Create model semaphore
+    Life-->>App: Yield State dict
+
+    Note over App: VLM Service Running
+    App->>App: Handle embed requests
+
+    Note over App: VLM Service Shutdown
+    App->>Life: Exit lifespan context
+```
+
+### Document API Startup
 
 ```mermaid
 sequenceDiagram
     participant App as FastAPI App
     participant Life as Lifespan Manager
     participant State as State Factory
-    participant ML as ColQwen2.5
-    participant Ext as External Services
+    participant VLM as VLM Service
 
-    Note over App: Application Startup
+    Note over App: Document API Startup
     App->>Life: Enter lifespan context
+    Life->>Life: Load settings
+    Life->>Life: Create VLMClient
+    Life->>VLM: health_check() (retry up to 30 attempts)
+    VLM-->>Life: Healthy
     Life->>State: Create Qdrant client
-    State-->>Life: AsyncQdrantClient
-    Life->>State: Create Supabase client
-    State-->>Life: AsyncClient
     Life->>State: Create Anthropic client
-    State-->>Life: AsyncAnthropic
-    Life->>ML: Load model & processor
-    ML-->>Life: ColQwen2.5, Processor
+    Life->>State: Create Supabase client
+    Life->>Life: Create uploader/downloader
+    Life->>Life: Create Qdrant semaphore (10)
     Life-->>App: Yield State dict
 
-    Note over App: Application Running
+    Note over App: Document API Running
     App->>App: Handle requests
 
-    Note over App: Application Shutdown
+    Note over App: Document API Shutdown
     App->>Life: Exit lifespan context
-    Life->>Ext: Close Qdrant client
-    Life->>Ext: Close Anthropic client
-    Life-->>App: Cleanup complete
+    Life->>Life: Close VLM client
+    Life->>Life: Close Qdrant client
+    Life->>Life: Close Anthropic client
 ```
 
 ## State Management
 
-The application uses FastAPI's lifespan pattern for state management:
-
-```mermaid
-graph LR
-    subgraph Lifespan["Lifespan Context Manager"]
-        Init["Initialize Clients"]
-        State["State TypedDict"]
-        Cleanup["Cleanup Resources"]
-    end
-
-    subgraph Request["Request Handling"]
-        Deps["Dependencies"]
-        Endpoint["Endpoint Handler"]
-    end
-
-    Init --> State
-    State --> Deps
-    Deps --> Endpoint
-    State --> Cleanup
-```
-
-### State TypedDict Fields
+### VLM Service State
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `model` | `ColQwen2_5` | Loaded vision-language model |
-| `processor` | `ColQwen2_5_Processor` | Image/text processor |
+| `model` | `Any` | Loaded vision-language model |
+| `processor` | `Any` | Image/text processor |
+| `model_semaphore` | `asyncio.Semaphore` | Concurrency control for GPU |
+| `device` | `str` | Device (cuda/mps/cpu) |
+| `model_name` | `str` | HuggingFace model name |
+| `model_type` | `str` | Model type identifier |
+| `settings` | `Settings` | VLM settings |
+
+### Document API State
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `vlm_client` | `VLMClient` | HTTP client for VLM service |
 | `supabase_uploader` | `SupabaseJPEGUploader` | Image upload service |
 | `supabase_downloader` | `SupabaseJPEGDownloader` | Image download service |
 | `instructor_client` | `AsyncInstructor` | Structured LLM client |
 | `qdrant_client` | `AsyncQdrantClient` | Vector DB client |
 | `collection_name` | `str` | Qdrant collection name |
-| `model_semaphore` | `asyncio.Semaphore` | Concurrency control for GPU access |
-| `qdrant_semaphore` | `asyncio.Semaphore` | Concurrency control for Qdrant connections |
+| `qdrant_semaphore` | `asyncio.Semaphore` | Concurrency control for Qdrant (10) |
 | `llm_config` | `dict[str, Any]` | LLM model configuration |
 | `settings` | `Settings` | Application settings |
 
 ## Dependency Injection
 
-```mermaid
-graph TD
-    subgraph Request["Incoming Request"]
-        R["Request Object"]
-    end
+### Document API Dependencies
 
-    subgraph State["Application State"]
-        S["request.state"]
-    end
+| Function | Returns | Source |
+|----------|---------|--------|
+| `get_vlm_client` | `VLMClient` | `request.state.vlm_client` |
+| `get_qdrant_client` | `AsyncQdrantClient` | `request.state.qdrant_client` |
+| `get_supabase_uploader` | `SupabaseJPEGUploader` | `request.state.supabase_uploader` |
+| `get_supabase_downloader` | `SupabaseJPEGDownloader` | `request.state.supabase_downloader` |
+| `get_collection_name` | `str` | `request.state.collection_name` |
+| `get_instructor_client` | `AsyncInstructor` | `request.state.instructor_client` |
+| `get_qdrant_semaphore` | `asyncio.Semaphore` | `request.state.qdrant_semaphore` |
+| `get_llm_config` | `dict[str, Any]` | `request.state.llm_config` |
+| `get_settings_from_state` | `Settings` | `request.state.settings` |
+| `get_prompts` | `dict[str, str]` | Cached prompt loading |
+| `get_auth_token` | `str \| None` | Authorization header |
 
-    subgraph Dependencies["Dependency Functions"]
-        D1["get_qdrant_client()"]
-        D2["get_colpali_model()"]
-        D3["get_colpali_processor()"]
-        D4["get_supabase_uploader()"]
-        D5["get_supabase_downloader()"]
-        D6["get_collection_name()"]
-        D7["get_instructor_client()"]
-        D8["get_prompts()"]
-        D9["get_qdrant_semaphore()"]
-    end
+### VLM Service Dependencies
 
-    subgraph Endpoint["Endpoint Handler"]
-        E["Handler Function"]
-    end
+| Function | Returns | Source |
+|----------|---------|--------|
+| `get_model` | `Any` | `request.state.model` |
+| `get_processor` | `Any` | `request.state.processor` |
+| `get_semaphore` | `asyncio.Semaphore` | `request.state.model_semaphore` |
+| `get_device` | `str` | `request.state.device` |
+| `get_model_name` | `str` | `request.state.model_name` |
+| `get_settings_from_state` | `Settings` | `request.state.settings` |
 
-    R --> S
-    S --> D1
-    S --> D2
-    S --> D3
-    S --> D4
-    S --> D5
-    S --> D6
-    S --> D7
-    D8 --> E
-    D1 --> E
-    D2 --> E
-    D3 --> E
-    D4 --> E
-    D5 --> E
-    D6 --> E
-    D7 --> E
-```
+## Inter-Service Communication
 
-## External Service Integration
-
-### Qdrant (Vector Database)
+The Document API communicates with the VLM service via HTTP using `VLMClient` (httpx + tenacity retry):
 
 ```mermaid
 graph LR
-    subgraph App["Application"]
-        Embed["Embeddings"]
-        Query["Query Vector"]
+    subgraph DocAPI["Document API"]
+        Client["VLMClient"]
     end
 
-    subgraph Qdrant["Qdrant"]
-        Collection["Collection"]
-        Index["Session ID Index"]
-        Vectors["Multi-Vectors"]
+    subgraph VLMService["VLM Service"]
+        Embed["/embed/images"]
+        Query["/embed/query"]
+        Health["/health"]
     end
 
-    Embed -->|Upsert| Collection
-    Query -->|Search| Collection
-    Collection --> Index
-    Collection --> Vectors
+    Client -->|"POST (retry x3)"| Embed
+    Client -->|"POST (retry x3)"| Query
+    Client -->|"GET"| Health
 ```
 
-**Collection Configuration:**
-- Vector size: 128
-- Distance: Cosine with MaxSim
-- Multi-vector support enabled
-- Indexed field: `session_id`
-
-### Supabase (Object Storage)
-
-```mermaid
-graph LR
-    subgraph App["Application"]
-        Upload["Upload Service"]
-        Download["Download Service"]
-    end
-
-    subgraph Supabase["Supabase Storage"]
-        Bucket["colpali bucket"]
-        subgraph Structure["Path Structure"]
-            Session["/{session_id}/"]
-            Doc["/{document}/"]
-            Page["/{page}.jpeg"]
-        end
-    end
-
-    Upload -->|JPEG| Bucket
-    Download -->|JPEG| Bucket
-    Bucket --> Session --> Doc --> Page
-```
-
-### Anthropic (LLM)
-
-```mermaid
-graph LR
-    subgraph App["Application"]
-        Instructor["Instructor Client"]
-        Images["Document Images"]
-        Prompts["System Prompts"]
-    end
-
-    subgraph Anthropic["Claude Sonnet 4"]
-        Vision["Vision Processing"]
-        Generate["Text Generation"]
-    end
-
-    subgraph Response["Structured Response"]
-        Refs["References"]
-        Answer["Answer"]
-    end
-
-    Instructor --> Vision
-    Images --> Vision
-    Prompts --> Vision
-    Vision --> Generate
-    Generate --> Refs
-    Generate --> Answer
-```
+**Error types:** `VLMClientError`, `VLMServiceUnavailable`, `VLMInferenceError`
 
 ## Design Patterns
 
-### 1. Factory Pattern
-Client creation is delegated to factory functions in `state.py`.
-
-### 2. Dependency Injection
-FastAPI's `Depends()` provides loose coupling between endpoints and services.
-
-### 3. Context Manager Pattern
-Lifespan context manager ensures proper resource initialization and cleanup.
-
-### 4. Repository Pattern
-Services abstract storage operations (Supabase uploader/downloader).
-
-### 5. Streaming Pattern
-Query responses use Server-Sent Events for real-time output.
-
-### 6. Retry Pattern
-Qdrant operations use Tenacity for automatic retry with exponential backoff.
-
-### 7. Semaphore Pattern
-Model inference is protected by asyncio.Semaphore to prevent concurrent GPU access.
-
-### 8. Middleware Pattern
-Request timeouts and rate limiting are implemented as middleware layers.
-
-### 9. Bearer Token Authentication
-JWT-based authentication using Supabase tokens validates user identity.
+1. **Microservice Pattern**: GPU inference isolated from CPU orchestration
+2. **Factory Pattern**: `get_loader()` creates appropriate model loader; client factories in `state.py`
+3. **Dependency Injection**: FastAPI's `Depends()` provides loose coupling
+4. **Context Manager Pattern**: Lifespan context managers for resource initialization and cleanup
+5. **Repository Pattern**: Services abstract storage operations (Supabase uploader/downloader)
+6. **Streaming Pattern**: Query responses use Server-Sent Events for real-time output
+7. **Retry Pattern**: VLMClient and Qdrant operations use Tenacity for automatic retry with exponential backoff
+8. **Semaphore Pattern**: Model inference (VLM, 1) and Qdrant connections (API, 10) protected by asyncio.Semaphore
+9. **Middleware Pattern**: Request timeouts and rate limiting as middleware layers
+10. **Bearer Token Authentication**: JWT-based authentication using Supabase tokens in both services

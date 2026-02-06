@@ -1,297 +1,206 @@
 # ColPali Module
 
-The ColPali module handles loading and configuration of the ColQwen 2.5 vision-language model.
+The ColPali module handles loading and configuration of vision-language models. It supports multiple model types through a factory pattern.
+
+**Location:** `colpali-vlm/src/vlm/colpali/`
 
 ## Module Structure
 
 ```
-src/app/colpali/
+colpali-vlm/src/vlm/colpali/
 ├── __init__.py
-└── loaders.py    # Model loading logic
+└── loaders.py    # Multi-model loader factory
 ```
 
 ## Overview
 
 ```mermaid
 graph TD
-    subgraph ColPali["ColPali Module"]
-        Loader["ColQwen2_5Loader"]
+    subgraph Factory["Loader Factory"]
+        GetLoader["get_loader(model_type, model_name)"]
     end
 
-    subgraph HuggingFace["HuggingFace Hub"]
-        Model["vidore/colqwen2.5-v0.2"]
-    end
-
-    subgraph Hardware["Hardware Detection"]
-        CUDA["CUDA"]
-        MPS["MPS (Apple)"]
-        CPU["CPU"]
+    subgraph Loaders["Loader Classes"]
+        Base["BaseColpaliLoader (ABC)"]
+        CQ25["ColQwen2_5Loader\n(128-dim)"]
+        CQ3["ColQwen3Loader\n(320-dim)"]
+        Tomoro["TomoroColQwen3Loader\n(320-dim)"]
     end
 
     subgraph Output["Loaded Components"]
-        ColQwen["ColQwen2_5"]
-        Processor["ColQwen2_5_Processor"]
+        Model["Model"]
+        Processor["Processor"]
     end
 
-    Loader --> HuggingFace
-    Loader --> Hardware
-    Loader --> Output
+    GetLoader --> CQ25
+    GetLoader --> CQ3
+    GetLoader --> Tomoro
+    Base --> CQ25
+    Base --> CQ3
+    Base --> Tomoro
+    CQ25 --> Output
+    CQ3 --> Output
+    Tomoro --> Output
 ```
 
 ---
 
-## loaders.py
+## BaseColpaliLoader (Abstract)
 
-### ColQwen2_5Loader Class
-
-Main class for loading the ColQwen 2.5 model with automatic hardware detection.
-
-```mermaid
-classDiagram
-    class ColQwen2_5Loader {
-        -model_name: str
-        -_device: str
-        -_dtype: torch.dtype
-        -_attn_implementation: str | None
-
-        +__init__(model_name: str)
-        +load() Tuple[ColQwen2_5, Processor]
-        +load_model() ColQwen2_5
-        +load_processor() ColQwen2_5_Processor
-    }
-
-    class ColQwen2_5 {
-        +forward(**kwargs) Tensor
-        +eval()
-        +to(device)
-    }
-
-    class ColQwen2_5_Processor {
-        +process_images(images) BatchFeature
-        +process_queries(queries) BatchFeature
-    }
-
-    ColQwen2_5Loader --> ColQwen2_5 : creates
-    ColQwen2_5Loader --> ColQwen2_5_Processor : creates
-```
-
-### Constructor
+Base class for all model loaders with automatic hardware detection.
 
 ```python
-def __init__(self, model_name: str) -> None:
-    self.model_name = model_name
-    self._device = (
-        "cuda"
-        if torch.cuda.is_available()
-        else "mps"
-        if torch.backends.mps.is_available()
-        else "cpu"
-    )
-    self._dtype = (
-        torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-    )
-    self._attn_implementation = (
-        "flash_attention_2" if is_flash_attn_2_available() else None
-    )
+class BaseColpaliLoader(ABC):
+    def __init__(self, model_name: str) -> None:
+        self.model_name = model_name
+        self._device = ...      # cuda > mps > cpu
+        self._dtype = ...       # bfloat16 if supported, else float16
+        self._attn_implementation = ...  # flash_attention_2 or None
 ```
 
-**Parameters:**
-- `model_name`: HuggingFace model identifier (e.g., `"vidore/colqwen2.5-v0.2"`)
+### Hardware Detection
 
----
-
-### Device Detection
-
-```mermaid
-graph TD
-    Start["Device Detection"]
-
-    CUDA{"torch.cuda.is_available()?"}
-    MPS{"torch.backends.mps.is_available()?"}
-
-    RetCUDA["'cuda'"]
-    RetMPS["'mps'"]
-    RetCPU["'cpu'"]
-
-    Start --> CUDA
-    CUDA -->|Yes| RetCUDA
-    CUDA -->|No| MPS
-    MPS -->|Yes| RetMPS
-    MPS -->|No| RetCPU
-```
+- **Device**: CUDA > MPS > CPU
+- **Data type**: bfloat16 (if CUDA supports it) > float16
+- **Attention**: Flash Attention 2 (if available on CUDA) > default
 
 ```python
-self._device = (
-    "cuda"
-    if torch.cuda.is_available()
-    else "mps"
-    if torch.backends.mps.is_available()
-    else "cpu"
-)
+def _detect_flash_attention(self) -> str | None:
+    if self._device == "cuda":
+        try:
+            import flash_attn
+            return "flash_attention_2"
+        except ImportError:
+            pass
+    return None
 ```
 
 ---
 
-### Data Type Detection
+## ColQwen2_5Loader
 
-```mermaid
-graph TD
-    Start["Data Type Detection"]
+Loader for ColQwen2.5 models using `colpali_engine`.
 
-    SupportsBF16{"torch.cuda.is_bf16_supported()?"}
-
-    RetBF16["torch.bfloat16"]
-    RetFP16["torch.float16"]
-
-    Start --> SupportsBF16
-    SupportsBF16 -->|Yes| RetBF16
-    SupportsBF16 -->|No| RetFP16
-```
+**Output dimension:** 128
 
 ```python
-self._dtype = (
-    torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-)
+class ColQwen2_5Loader(BaseColpaliLoader):
+    def load(self) -> tuple[Any, Any]:
+        from colpali_engine.models import ColQwen2_5, ColQwen2_5_Processor
+
+        model = ColQwen2_5.from_pretrained(
+            pretrained_model_name_or_path=self.model_name,
+            device_map=self._device,
+            dtype=self._dtype,
+            attn_implementation=self._attn_implementation,
+        ).eval()
+
+        processor = ColQwen2_5_Processor.from_pretrained(self.model_name)
+        return model, processor
 ```
 
 ---
 
-### Attention Implementation Detection
+## ColQwen3Loader
 
-```mermaid
-graph TD
-    Start["Attention Detection"]
+Loader for ColQwen3 models using `colpali_engine`. Includes a rope_scaling patch for AWQ models.
 
-    CheckFA{"is_flash_attn_2_available()?"}
-
-    RetFA2["return 'flash_attention_2'"]
-    RetNone["return None (default)"]
-
-    Start --> CheckFA
-    CheckFA -->|Yes| RetFA2
-    CheckFA -->|No| RetNone
-```
+**Output dimension:** 320
 
 ```python
-from transformers.utils.import_utils import is_flash_attn_2_available
+class ColQwen3Loader(BaseColpaliLoader):
+    def load(self) -> tuple[Any, Any]:
+        from colpali_engine.models import ColQwen3, ColQwen3Processor
+        from transformers import AutoConfig
 
-self._attn_implementation = (
-    "flash_attention_2" if is_flash_attn_2_available() else None
-)
+        # Load and patch config for AWQ models missing rope_scaling
+        config = AutoConfig.from_pretrained(self.model_name, trust_remote_code=True)
+        if hasattr(config, 'text_config') and config.text_config is not None:
+            if not hasattr(config.text_config, 'rope_scaling') or config.text_config.rope_scaling is None:
+                config.text_config.rope_scaling = {
+                    "type": "mrope",
+                    "mrope_section": [24, 20, 20]
+                }
+
+        model = ColQwen3.from_pretrained(
+            pretrained_model_name_or_path=self.model_name,
+            config=config,
+            device_map=self._device,
+            dtype=self._dtype,
+            attn_implementation=self._attn_implementation,
+        ).eval()
+
+        processor = ColQwen3Processor.from_pretrained(self.model_name)
+        return model, processor
 ```
 
 ---
 
-### Load Methods
+## TomoroColQwen3Loader
 
-#### `load() -> Tuple[ColQwen2_5, ColQwen2_5_Processor]`
+Loader for TomoroAI ColQwen3 models using `transformers` AutoModel.
 
-Loads both model and processor.
+**Output dimension:** 320
 
 ```python
-def load(self) -> tuple[ColQwen2_5, ColQwen2_5_Processor]:
-    return self.load_model(), self.load_processor()
+class TomoroColQwen3Loader(BaseColpaliLoader):
+    def load(self) -> tuple[Any, Any]:
+        from transformers import AutoModel, AutoProcessor
+
+        model = AutoModel.from_pretrained(
+            self.model_name,
+            dtype=self._dtype,
+            attn_implementation=self._attn_implementation,
+            trust_remote_code=True,
+            device_map=self._device,
+        ).eval()
+
+        processor = AutoProcessor.from_pretrained(
+            self.model_name,
+            trust_remote_code=True,
+            max_num_visual_tokens=1280,
+        )
+        return model, processor
 ```
 
 ---
 
-#### `load_model() -> ColQwen2_5`
+## get_loader() Factory
 
-Loads the ColQwen 2.5 model from HuggingFace.
-
-```python
-def load_model(self) -> ColQwen2_5:
-    model = ColQwen2_5.from_pretrained(
-        pretrained_model_name_or_path=self.model_name,
-        device_map=self._device,
-        dtype=self._dtype,
-        attn_implementation=self._attn_implementation,
-    ).eval()
-    return model
-```
-
-**Returns:** Loaded model in evaluation mode
-
----
-
-#### `load_processor() -> ColQwen2_5_Processor`
-
-Loads the processor for image/text preprocessing.
+Factory function that creates the appropriate loader based on model type.
 
 ```python
-def load_processor(self) -> ColQwen2_5_Processor:
-    return ColQwen2_5_Processor.from_pretrained(self.model_name)
+def get_loader(model_type: str, model_name: str) -> BaseColpaliLoader:
+    if model_type == "colqwen2.5":
+        return ColQwen2_5Loader(model_name)
+    elif model_type == "colqwen3":
+        return ColQwen3Loader(model_name)
+    elif model_type == "tomoro-colqwen3":
+        return TomoroColQwen3Loader(model_name)
+    elif model_type == "auto":
+        # Auto-detect based on model name
+        if "tomoro" in model_name.lower():
+            return TomoroColQwen3Loader(model_name)
+        elif "colqwen3" in model_name.lower():
+            return ColQwen3Loader(model_name)
+        return ColQwen2_5Loader(model_name)  # Default
 ```
-
-**Returns:** Processor instance
 
 ---
 
 ## Model Specifications
 
-### ColQwen 2.5
+| Model | Model ID | Loader | Library | Dimensions | Processing |
+|-------|----------|--------|---------|-----------|------------|
+| ColQwen2.5 | `vidore/colqwen2.5-v0.2` | `ColQwen2_5Loader` | `colpali_engine` | 128 | `process_images` / `process_queries` |
+| ColQwen3 | Various | `ColQwen3Loader` | `colpali_engine` | 320 | `process_images` / `process_queries` |
+| TomoroAI | `TomoroAI/tomoro-colqwen3-embed-4b` | `TomoroColQwen3Loader` | `transformers` | 320 | `process_images` / `process_texts` |
 
-| Property | Value |
-|----------|-------|
-| Model ID | `vidore/colqwen2.5-v0.2` |
-| Output Dimension | 128 |
-| Multi-vector | Yes |
-| Vision Encoder | Qwen2-VL |
+### Output Format Differences
 
-### Processing Pipeline
-
-```mermaid
-sequenceDiagram
-    participant Input as Input
-    participant Processor
-    participant Model
-    participant Output as Output
-
-    rect rgb(240, 248, 255)
-        Note over Input,Processor: Image Processing
-        Input->>Processor: PIL.Image[]
-        Processor->>Processor: Resize, normalize
-        Processor-->>Model: BatchFeature (pixel_values)
-    end
-
-    rect rgb(255, 248, 240)
-        Note over Input,Processor: Query Processing
-        Input->>Processor: query_text
-        Processor->>Processor: Tokenize
-        Processor-->>Model: BatchFeature (input_ids)
-    end
-
-    rect rgb(240, 255, 240)
-        Note over Model,Output: Forward Pass
-        Model->>Model: Forward with inference_mode
-        Model-->>Output: embeddings (N x 128)
-    end
-```
-
----
-
-## Usage Example
-
-```python
-from src.app.colpali.loaders import ColQwen2_5Loader
-from PIL import Image
-import torch
-
-# Load model and processor
-loader = ColQwen2_5Loader("vidore/colqwen2.5-v0.2")
-model, processor = loader.load()
-
-# Process images
-images = [Image.open("page1.jpg"), Image.open("page2.jpg")]
-batch = processor.process_images(images)
-batch = {k: v.to(model.device) for k, v in batch.items()}
-
-# Generate embeddings
-with torch.inference_mode():
-    embeddings = model(**batch)
-
-# embeddings shape: [batch_size, num_patches, 128]
-```
+The embed endpoint handles both output formats:
+- **colpali_engine models**: Returns tensor directly
+- **TomoroAI models**: Returns object with `.embeddings` attribute
 
 ---
 
@@ -302,13 +211,3 @@ with torch.inference_mode():
 | CPU + FP16 | ~4 GB | Development |
 | CUDA + BF16 | ~4 GB VRAM | Production |
 | MPS + FP16 | ~4 GB | Mac development |
-
----
-
-## Performance Tips
-
-1. **Use CUDA if available**: Significantly faster inference
-2. **Enable Flash Attention 2**: Reduces memory and improves speed
-3. **Use bfloat16**: Better numerical stability on supported GPUs
-4. **Batch processing**: Process multiple images together when possible
-5. **inference_mode**: Always use `torch.inference_mode()` for inference

@@ -1,20 +1,16 @@
-# Development docker-compose: runs both VLM and Document API services
-# Usage: docker-compose up --build
+# RunPod docker-compose: VLM service with baked-in models (no volume needed)
+# Usage: docker-compose -f docker-compose.runpod.yml up --build
 
 services:
   vlm:
     build:
       context: ./colpali-vlm
-      # dockerfile: Dockerfile.tomoro-colqwen3  # Development: runtime model download
-      dockerfile: Dockerfile.colpali2_5  # Development: runtime model download
-    container_name: colpali_vlm
+      dockerfile: Dockerfile.runpod
+    container_name: colpali_vlm_runpod
     ports:
       - "8001:8000"
     env_file:
       - colpali-vlm/.env
-    volumes:
-      # Persist HuggingFace cache to avoid re-downloading model
-      - vlm_hf_cache:/app/model_cache
     deploy:
       resources:
         reservations:
@@ -29,7 +25,6 @@ services:
       start_period: 600s  # 10 minutes for first-time model download + loading
       retries: 5
     restart: unless-stopped
-
   api:
     build:
       context: ./document-api
@@ -49,6 +44,4 @@ services:
       start_period: 10s
       retries: 3
     restart: unless-stopped
-
-volumes:
-  vlm_hf_cache:
+  

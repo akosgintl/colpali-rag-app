@@ -1,0 +1,68 @@
+# Development Dockerfile with CUDA 12.8, PyTorch 2.8, Flash Attention 2
+# Uses RunPod's official PyTorch image for compatibility
+# Models downloaded at runtime and cached in volume (vlm_hf_cache)
+# Image size: ~10GB (PyTorch + CUDA + flash-attn, no model weights)
+
+# Stage 1: Dependencies (use RunPod base image with PyTorch 2.8.0 + CUDA 12.8.1)
+FROM runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404 AS deps
+
+ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_PREFERENCE=only-system
+
+WORKDIR /app
+
+# Install uv
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+
+ENV PATH="/root/.local/bin:/app/.venv/bin:$PATH"
+
+# Install flash-attn from prebuilt wheel (CUDA 12.8 + PyTorch 2.8)
+RUN pip install https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.2/flash_attn-2.8.3%2Bcu128torch2.8-cp312-cp312-linux_x86_64.whl
+
+# Copy dependency files
+COPY pyproject.toml uv.lock ./
+RUN touch README.md
+
+# Create venv using system Python (3.12) and inheriting system packages (PyTorch, flash-attn)
+RUN uv venv --system-site-packages && \
+    uv sync --frozen --no-install-project --no-dev --no-cache
+
+# Install packages that must be in venv (not system site-packages) to survive COPY
+# cffi: C extension needed by tokenizers/cryptography, breaks if only in system packages
+RUN uv pip install cffi auto-round>=0.5 --no-cache
+
+# Stage 2: Build application
+FROM deps AS builder
+COPY src/ ./src/
+COPY server.py ./
+RUN uv sync --frozen --no-dev --no-cache
+
+# Stage 3: Runtime (use same RunPod base for compatibility)
+FROM runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404 AS runtime
+
+ENV PYTHONUNBUFFERED=1
+ENV HF_HOME=/app/model_cache
+ENV HF_HUB_ENABLE_HF_TRANSFER=0
+
+WORKDIR /app
+
+# Install flash-attn from prebuilt wheel (same as deps stage)
+RUN pip install https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.2/flash_attn-2.8.3%2Bcu128torch2.8-cp312-cp312-linux_x86_64.whl
+
+# Copy from builder stage
+COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /app/src /app/src
+COPY --from=builder /app/server.py /app/server.py
+
+ENV PATH="/app/.venv/bin:$PATH" PYTHONPATH="/app/src"
+
+# Expose port
+EXPOSE 8000
+
+# Health check (extended start period for first-time model download)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=600s --retries=5 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Note: Models will be downloaded on first startup to /app/model_cache (mount a volume here)
+# For GPU workloads, stick to 1 worker per GPU since each worker loads its own model copy (~8GB).
+# Use WORKERS env var to configure worker count (default: 1)
+CMD ["sh", "-c", "gunicorn server:app --workers ${WORKERS:-1} --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT:-8000} --timeout 600"]
