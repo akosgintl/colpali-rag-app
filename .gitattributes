@@ -1,0 +1,3 @@
+# Force Unix line endings for shell scripts (prevents CRLF issues in containers)
+*.sh text eol=lf
+entrypoint* text eol=lf

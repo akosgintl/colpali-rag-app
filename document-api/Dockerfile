@@ -19,13 +19,19 @@ ENV PATH="/root/.local/bin:/app/.venv/bin:$PATH"
 
 # Copy dependency files
 COPY pyproject.toml uv.lock ./
-RUN touch README.md && uv sync --frozen --no-install-project --no-dev --no-cache
+RUN touch README.md && uv sync --frozen --no-install-project --no-dev --no-cache && \
+    uv cache clean || true
 
 # Copy application
 COPY src/ ./src/
 COPY prompts/ ./prompts/
 COPY server.py ./
-RUN uv sync --frozen --no-dev --no-cache
+RUN uv sync --frozen --no-dev --no-cache && \
+    # Clean Python cache files
+    find /app -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true && \
+    find /app -type f -name "*.pyc" -delete || true && \
+    find /app -type f -name "*.pyo" -delete || true && \
+    uv cache clean || true
 
 
 # Runtime stage
@@ -46,6 +52,11 @@ COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/src /app/src
 COPY --from=builder /app/prompts /app/prompts/
 COPY --from=builder /app/server.py /app/server.py
+
+# Final cleanup: remove any remaining cache files
+RUN find /app/.venv -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true && \
+    find /app/.venv -type f -name "*.pyc" -delete || true && \
+    find /app/.venv -type f -name "*.pyo" -delete || true
 
 ENV PATH="/app/.venv/bin:$PATH" PYTHONPATH="/app/src"
 

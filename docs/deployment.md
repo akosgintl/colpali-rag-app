@@ -129,7 +129,7 @@ services:
     env_file:
       - colpali-vlm/.env
     volumes:
-      - vlm_hf_cache:/app/model_cache      # Persist model cache
+      - vlm_hf_cache:/models                # Persist model cache
     deploy:
       resources:
         reservations:

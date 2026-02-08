@@ -21,12 +21,18 @@ class TimeoutMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         # Determine timeout based on endpoint path
         path = request.url.path
+        
+        # Skip timeout for health checks and FastAPI built-in endpoints
+        if path in ("/health", "/docs", "/openapi.json", "/redoc"):
+            return await call_next(request)
+        
         if path == "/ingest-pdfs/":
             timeout = self.settings.timeout.ingest_endpoint_timeout_seconds
         elif path == "/query/":
             timeout = self.settings.timeout.query_endpoint_timeout_seconds
         else:
-            timeout = self.settings.timeout.ingest_endpoint_timeout_seconds
+            # Default timeout for other endpoints
+            timeout = self.settings.timeout.query_endpoint_timeout_seconds
 
         logger.info(f"TimeoutMiddleware: path={path} | timeout={timeout}")
 

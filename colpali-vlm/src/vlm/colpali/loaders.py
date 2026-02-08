@@ -39,19 +39,41 @@ class BaseColpaliLoader(ABC):
         self._attn_implementation = self._detect_flash_attention()
 
     def _detect_flash_attention(self) -> str | None:
-        if self._device == "cuda":
-            try:
-                import flash_attn
+        if self._device != "cuda":
+            return None
 
-                logger.info(
-                    "Flash Attention 2 detected | version={}",
-                    flash_attn.__version__,
-                )
-                return "flash_attention_2"
-            except ImportError:
-                logger.warning(
-                    "Flash Attention 2 not available - falling back to default"
-                )
+        # Flash Attention 2 requires Ampere+ (compute capability >= 8.0)
+        major, minor = torch.cuda.get_device_capability()
+        cc = f"{major}.{minor}"
+        gpu_name = torch.cuda.get_device_name()
+
+        if major < 8:
+            logger.warning(
+                "GPU not compatible with Flash Attention 2 | "
+                "gpu={} | compute_capability={} | required>=8.0 | "
+                "falling back to default attention",
+                gpu_name,
+                cc,
+            )
+            return None
+
+        try:
+            import flash_attn
+
+            logger.info(
+                "Flash Attention 2 enabled | version={} | gpu={} | compute_capability={}",
+                flash_attn.__version__,
+                gpu_name,
+                cc,
+            )
+            return "flash_attention_2"
+        except ImportError:
+            logger.warning(
+                "Flash Attention 2 not installed - falling back to default | "
+                "gpu={} | compute_capability={}",
+                gpu_name,
+                cc,
+            )
         return None
 
     @property

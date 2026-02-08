@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Request, Response
 from loguru import logger
+from starlette.middleware.gzip import GZipMiddleware
 
 from vlm.api.endpoints import embed
 from vlm.api.lifespan import lifespan
@@ -17,6 +18,9 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+# Add compression middleware for embedding responses (60-80% size reduction)
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 app.include_router(embed.router)
 

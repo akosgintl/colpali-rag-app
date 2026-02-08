@@ -27,8 +27,9 @@ colpali-rag-app/
 │   │   └── settings.py
 │   ├── server.py
 │   ├── pyproject.toml
-│   ├── Dockerfile.colpali2_5           # Dev: ColQwen2.5, runtime download (~4GB)
-│   ├── Dockerfile.tomoro-colqwen3      # Dev: TomoroAI, runtime download (~10GB)
+│   ├── entrypoint.dbc.sh               # Entrypoint: downloads model at container start
+│   ├── Dockerfile.local                # Dev: all models, runtime download
+│   ├── Dockerfile.dbc                  # Dev: optimized for Docker Build Cloud
 │   ├── Dockerfile.runpod               # Prod: baked-in models (~15GB)
 │   └── Makefile
 │
@@ -70,23 +71,25 @@ colpali-rag-app/
 
 ## Docker Images
 
-The VLM service has three Dockerfiles optimized for different use cases:
+The VLM service has two Dockerfiles:
 
-### Development: `Dockerfile.colpali2_5` (~4GB)
-- **Use case**: Local development with ColQwen2.5 (default)
-- **Model loading**: Runtime download on first startup
-- **Storage**: Models cached in Docker volume (`vlm_hf_cache`)
-- **Pros**: Smaller image, faster builds
+### Development: `Dockerfile.local`
+- **Use case**: Local development with any supported model
+- **Model loading**: Entrypoint downloads model before app starts (`entrypoint.dbc.sh`)
+- **Storage**: Models cached in Docker volume (`vlm_hf_cache` mounted at `/models`)
+- **Model selection**: Via `.env` var `COLPALI_MODEL_NAME` (read by entrypoint + app)
+- **Base**: CUDA 12.8 + Ubuntu 24.04 + prebuilt flash-attn wheel
 - **Cons**: First startup takes 5-10 minutes for model download
 - **Usage**: `make docker_up` (default in `docker-compose.yml`)
 
-### Development: `Dockerfile.tomoro-colqwen3` (~10GB)
-- **Use case**: Local development with TomoroAI ColQwen3
-- **Model loading**: Runtime download on first startup
-- **Storage**: Models cached in Docker volume (`vlm_hf_cache`)
-- **Pros**: Access to SOTA TomoroAI model
-- **Cons**: Larger image, longer first startup
-- **Usage**: Switch `dockerfile` in `docker-compose.yml` to `Dockerfile.tomoro-colqwen3`
+### Development (DBC): `Dockerfile.dbc`
+- **Use case**: Local development via Docker Build Cloud (stripped deps, smaller image)
+- **Model loading**: Entrypoint downloads model before app starts (`entrypoint.dbc.sh`)
+- **Storage**: Models cached in Docker volume mounted at `/models`
+- **Model selection**: Via `.env` var `COLPALI_MODEL_NAME`
+- **Base**: CUDA 12.8 + Ubuntu 24.04 + prebuilt flash-attn wheel
+- **Difference from local**: Stripped site-packages (no NCCL, cuDNN, Triton) for smaller image
+- **Usage**: `docker build -f Dockerfile.dbc -t colpali-vlm:dbc .`
 
 ### Production: `Dockerfile.runpod` (~15GB)
 - **Use case**: RunPod deployment, production environments
@@ -329,5 +332,5 @@ PORT=8000
 2. **VLM Client**: Document API uses `VLMClient` (httpx + tenacity) instead of direct model calls
 3. **No colpali-engine**: Document API has no PyTorch/GPU dependencies
 4. **Independent scaling**: API can scale horizontally; VLM scales per GPU
-5. **Three VLM images**: Dev ColQwen2.5 ~4GB, Dev TomoroAI ~10GB, RunPod ~15GB (baked-in models)
+5. **Three VLM images**: Dev `Dockerfile.local` / `Dockerfile.dbc` (runtime model download via entrypoint), Prod `Dockerfile.runpod` (~15GB, baked-in models)
 6. **API image**: ~500MB (CPU-only, no PyTorch)

@@ -5,16 +5,15 @@ services:
   vlm:
     build:
       context: ./colpali-vlm
-      # dockerfile: Dockerfile.tomoro-colqwen3  # Development: runtime model download
-      dockerfile: Dockerfile.colpali2_5  # Development: runtime model download
-    container_name: colpali_vlm
+      dockerfile: Dockerfile
+    container_name: colpali-vlm
     ports:
       - "8001:8000"
     env_file:
       - colpali-vlm/.env
     volumes:
-      # Persist HuggingFace cache to avoid re-downloading model
-      - vlm_hf_cache:/app/model_cache
+      # Persist HuggingFace model cache to avoid re-downloading
+      - vlm_hf_cache:/models
     deploy:
       resources:
         reservations:

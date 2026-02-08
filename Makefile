@@ -106,18 +106,30 @@ docker_runpod_down:
 # ------------------------------------------------------------------------------
 # Docker Build & Push (VLM Service - for RunPod)
 # ------------------------------------------------------------------------------
-# Build development image (runtime model download, ~4GB)
+# Build local development image (runtime model download, works with all models)
 docker_build_vlm:
-	cd colpali-vlm && docker build -t colpali-vlm:latest .
+	cd colpali-vlm && docker build -f Dockerfile.local -t colpali-vlm:latest .
 
-# Build RunPod image (baked-in models, ~12GB)
+# Build RunPod image (baked-in models, ~15-20GB for single model)
+# Usage: make docker_build_vlm_runpod COLPALI_MODEL=TomoroAI/tomoro-colqwen3-embed-4b
+# Or: make docker_build_vlm_runpod COLPALI_MODEL=vidore/colqwen2.5-v0.2
 docker_build_vlm_runpod:
-	cd colpali-vlm && docker build -f Dockerfile.runpod -t colpali-vlm:runpod .
+	cd colpali-vlm && docker build -f Dockerfile.runpod --build-arg COLPALI_MODEL=$(or $(COLPALI_MODEL),TomoroAI/tomoro-colqwen3-embed-4b) -t colpali-vlm:runpod .
 
+# Build with TomoroAI model (default, 320-dim)
+docker_build_vlm_runpod_tomoroai:
+	cd colpali-vlm && docker build -f Dockerfile.runpod --build-arg COLPALI_MODEL=TomoroAI/tomoro-colqwen3-embed-4b -t colpali-vlm:runpod .
+
+# Build with ColQwen2.5 model (128-dim, smaller)
+docker_build_vlm_runpod_colqwen2_5:
+	cd colpali-vlm && docker build -f Dockerfile.runpod --build-arg COLPALI_MODEL=vidore/colqwen2.5-v0.2 -t colpali-vlm:runpod .
+
+# Push local development image to Docker Hub
 docker_push_vlm:
 	docker tag colpali-vlm:latest $(DOCKERHUB_USERNAME)/colpali-vlm:latest
 	docker push $(DOCKERHUB_USERNAME)/colpali-vlm:latest
 
+# Push RunPod image to Docker Hub
 docker_push_vlm_runpod:
 	docker tag colpali-vlm:runpod $(DOCKERHUB_USERNAME)/colpali-vlm:runpod
 	docker push $(DOCKERHUB_USERNAME)/colpali-vlm:runpod
@@ -125,9 +137,11 @@ docker_push_vlm_runpod:
 # ------------------------------------------------------------------------------
 # Docker Build & Push (Document API)
 # ------------------------------------------------------------------------------
+# Build Document API image	
 docker_build_api:
 	cd document-api && docker build -t document-api:latest .
 
+# Push Document API image to Docker Hub
 docker_push_api:
 	docker tag document-api:latest $(DOCKERHUB_USERNAME)/document-api:latest
 	docker push $(DOCKERHUB_USERNAME)/document-api:latest
@@ -135,6 +149,17 @@ docker_push_api:
 # ------------------------------------------------------------------------------
 # Combined Build & Push
 # ------------------------------------------------------------------------------
+# Build all images
 docker_build_all: docker_build_vlm docker_build_api
 
+# Push all images to Docker Hub
 docker_push_all: docker_push_vlm docker_push_api
+
+# Build DBC image
+docker_build_dbc:
+	cd colpali-vlm && docker buildx build --progress=plain -f Dockerfile.dbc --build-arg COLPALI_MODEL=$(or $(COLPALI_MODEL),TomoroAI/tomoro-colqwen3-embed-4b) -t $(DOCKERHUB_USERNAME)/colpali-vlm:dbc --push .
+
+# Push DBC image to Docker Hub
+docker_push_dbc:
+	docker tag colpali-vlm:dbc $(DOCKERHUB_USERNAME)/colpali-vlm:dbc
+	docker push $(DOCKERHUB_USERNAME)/colpali-vlm:dbc

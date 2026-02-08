@@ -36,6 +36,8 @@ class VLMClient:
     def __init__(self, base_url: str, timeout_seconds: int = 120):
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
+        # httpx automatically handles gzip compression (sends Accept-Encoding header
+        # and decompresses responses transparently)
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(float(timeout_seconds)),
             limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
@@ -79,7 +81,8 @@ class VLMClient:
         return ("images", buffer.getvalue(), "image/jpeg")
 
     @retry(
-        retry=retry_if_exception_type((httpx.RequestError, httpx.HTTPStatusError)),
+        # Only retry on connection errors, not on timeouts or HTTP errors
+        retry=retry_if_exception_type(httpx.ConnectError),
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=1, max=10),
         reraise=True,
@@ -117,6 +120,15 @@ class VLMClient:
                 headers=self._get_headers(auth_token),
             )
             response.raise_for_status()
+        except httpx.TimeoutException as e:
+            logger.error(
+                "VLM service request timed out | timeout_seconds={} | error={}",
+                self.timeout_seconds,
+                str(e),
+            )
+            raise VLMInferenceError(
+                f"VLM service request timed out after {self.timeout_seconds} seconds"
+            ) from e
         except httpx.ConnectError as e:
             logger.error("VLM service connection failed | error={}", str(e))
             raise VLMServiceUnavailable(
@@ -146,7 +158,8 @@ class VLMClient:
         return data["embeddings"]
 
     @retry(
-        retry=retry_if_exception_type((httpx.RequestError, httpx.HTTPStatusError)),
+        # Only retry on connection errors, not on timeouts or HTTP errors
+        retry=retry_if_exception_type(httpx.ConnectError),
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=1, max=10),
         reraise=True,
@@ -176,6 +189,15 @@ class VLMClient:
                 headers=self._get_headers(auth_token),
             )
             response.raise_for_status()
+        except httpx.TimeoutException as e:
+            logger.error(
+                "VLM service request timed out | timeout_seconds={} | error={}",
+                self.timeout_seconds,
+                str(e),
+            )
+            raise VLMInferenceError(
+                f"VLM service request timed out after {self.timeout_seconds} seconds"
+            ) from e
         except httpx.ConnectError as e:
             logger.error("VLM service connection failed | error={}", str(e))
             raise VLMServiceUnavailable(

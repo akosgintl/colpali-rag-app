@@ -16,7 +16,7 @@ class VLMSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     vlm_service_url: str = "http://localhost:8001"
-    vlm_timeout_seconds: int = 120
+    vlm_timeout_seconds: int = 480  # 8 minutes - allows for slow VLM processing while staying under ingest timeout (600s)
 
 
 class SupabaseSettings(BaseSettings):
