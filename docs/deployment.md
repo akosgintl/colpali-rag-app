@@ -105,25 +105,23 @@ make all       # All checks + cleanup
 
 ### Docker Images
 
-The application uses four Docker images:
+| Service | Dockerfile | Model Loading | Use Case |
+|---------|-----------|---------------|----------|
+| VLM Service | `colpali-vlm/Dockerfile` | Runtime download via `entrypoint.sh` | All environments |
+| Document API | `document-api/Dockerfile` | N/A (CPU-only, ~500MB) | All environments |
 
-| Image | Dockerfile | Size | Use Case |
-|-------|-----------|------|----------|
-| VLM (ColQwen2.5) | `colpali-vlm/Dockerfile.colpali2_5` | ~4GB | Dev: runtime model download |
-| VLM (TomoroAI) | `colpali-vlm/Dockerfile.tomoro-colqwen3` | ~10GB | Dev: runtime model download |
-| VLM (RunPod) | `colpali-vlm/Dockerfile.runpod` | ~15GB | Prod: baked-in models |
-| Document API | `document-api/Dockerfile` | ~500MB | CPU-only, lightweight |
+The VLM image uses a multi-stage build (CUDA 12.8 + Ubuntu 24.04 + prebuilt flash-attn) with stripped site-packages for a smaller image. The model is downloaded at container startup and cached in a Docker volume.
 
 ### Docker Compose (Development)
 
-The `docker-compose.yml` starts both services with the ColQwen2.5 VLM image by default:
+The `docker-compose.yml` starts both services:
 
 ```yaml
 services:
   vlm:
     build:
       context: ./colpali-vlm
-      dockerfile: Dockerfile.colpali2_5    # Switch to Dockerfile.tomoro-colqwen3 for TomoroAI
+      dockerfile: Dockerfile
     ports:
       - "8001:8000"
     env_file:
@@ -151,12 +149,12 @@ services:
         condition: service_healthy
 ```
 
-### Docker Compose (RunPod)
+### Docker Compose (Cloud / RunPod)
 
-The `docker-compose.runpod.yml` uses the production VLM image with baked-in models:
+The `docker-compose.runpod.yml` runs only the Document API service (VLM is deployed separately on a GPU instance):
 
 ```bash
-make docker_runpod_up           # Build and start
+make docker_runpod_up           # Build and start API only
 make docker_runpod_up_detach    # Run in background
 make docker_runpod_logs         # View logs
 make docker_runpod_down         # Stop
@@ -165,19 +163,17 @@ make docker_runpod_down         # Stop
 ### Building and Pushing Images
 
 ```bash
-# VLM images
-make docker_build_vlm           # Build dev VLM image
-make docker_build_vlm_runpod    # Build RunPod VLM image (~15GB, baked-in models)
-make docker_push_vlm            # Push dev image to Docker Hub
-make docker_push_vlm_runpod     # Push RunPod image to Docker Hub
+# VLM image
+make docker_build_vlm           # Build VLM image
+make docker_push_vlm            # Push to Docker Hub
 
 # API image
 make docker_build_api           # Build Document API image (~500MB)
 make docker_push_api            # Push to Docker Hub
 
 # All at once
-make docker_build_all           # Build VLM (dev) + API
-make docker_push_all            # Push VLM (dev) + API
+make docker_build_all           # Build VLM + API
+make docker_push_all            # Push VLM + API
 ```
 
 ---
@@ -211,8 +207,8 @@ graph LR
 ### Build and Push
 
 ```bash
-# Build RunPod-optimized VLM image (baked-in models, Flash Attention 2)
-make docker_build_vlm_runpod
+# Build VLM image (model downloaded at runtime via entrypoint)
+make docker_build_vlm
 
 # Build API image
 make docker_build_api
@@ -220,7 +216,7 @@ make docker_build_api
 # Push both to Docker Hub
 export DOCKERHUB_USERNAME=your-username
 docker login
-make docker_push_vlm_runpod
+make docker_push_vlm
 make docker_push_api
 ```
 

@@ -244,6 +244,8 @@ Returns multi-vectors for each image:
 - **128-dim** for ColQwen2.5
 - **320-dim** for ColQwen3/TomoroAI
 
+**Note:** Embeddings are returned as float16 values (converted from float32) for ~50% response size reduction. Responses are also GZip-compressed (60-80% further reduction) via middleware.
+
 ---
 
 ### POST /embed/query

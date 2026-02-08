@@ -106,7 +106,7 @@ AUTH_ENABLED=false
 ```bash
 # VLM Service Connection (Required)
 VLM_SERVICE_URL=http://localhost:8001
-VLM_TIMEOUT_SECONDS=120
+VLM_TIMEOUT_SECONDS=120                # Timeout for VLM HTTP requests (code default: 480)
 
 # Qdrant (Required)
 QDRANT_URL=fillme
@@ -191,39 +191,24 @@ make dev_api    # Runs on port 8000, connects to VLM on 8001
 
 ## Docker Images
 
-The VLM service has three Dockerfiles optimized for different use cases:
+| Service | Dockerfile | Model Loading | Use Case |
+|---------|-----------|---------------|----------|
+| VLM Service | `colpali-vlm/Dockerfile` | Runtime download via entrypoint | All environments |
+| Document API | `document-api/Dockerfile` | N/A (CPU-only, ~500MB) | All environments |
 
-| Dockerfile | Size | Model Loading | Use Case |
-|-----------|------|---------------|----------|
-| `Dockerfile.colpali2_5` | ~4GB | Runtime download | Development (ColQwen2.5) |
-| `Dockerfile.tomoro-colqwen3` | ~10GB | Runtime download | Development (TomoroAI) |
-| `Dockerfile.runpod` | ~15GB | Baked into image | Production (RunPod) |
+The VLM image uses a multi-stage build (CUDA 12.8 + stripped deps) and downloads the model at container startup via `entrypoint.sh`. Models are cached in a Docker volume (`vlm_hf_cache`).
 
-The Document API has one lightweight Dockerfile (~500MB, CPU-only).
+### Cloud Deployment (GPU)
 
-### RunPod Deployment (GPU Cloud)
-
-For production GPU deployment on RunPod:
-
-1. **Build the RunPod-optimized VLM image:**
-```shell
-make docker_build_vlm_runpod
-```
-
-2. **Push to Docker Hub:**
+1. **Build and push images:**
 ```shell
 export DOCKERHUB_USERNAME=your-username
 docker login
-make docker_push_vlm_runpod
+make docker_build_vlm && make docker_push_vlm
+make docker_build_api && make docker_push_api
 ```
 
-3. **Build and push the API image:**
-```shell
-make docker_build_api
-make docker_push_api
-```
-
-4. **Deploy on RunPod** - See [docs/deployment.md](docs/deployment.md) for detailed instructions.
+2. **Deploy** - See [docs/deployment.md](docs/deployment.md) for detailed instructions.
 
 ### Flash Attention 2 (Optional)
 
@@ -277,9 +262,8 @@ colpali-rag-app/
 │   │   └── settings.py
 │   ├── server.py
 │   ├── pyproject.toml
-│   ├── Dockerfile.colpali2_5           # Dev: ColQwen2.5 (~4GB)
-│   ├── Dockerfile.tomoro-colqwen3      # Dev: TomoroAI (~10GB)
-│   ├── Dockerfile.runpod               # Prod: baked-in models (~15GB)
+│   ├── Dockerfile                      # CUDA 12.8 + stripped deps, entrypoint model download
+│   ├── entrypoint.sh                   # Downloads model at container start
 │   └── Makefile
 │
 ├── document-api/                       # Document API microservice (CPU)
@@ -307,14 +291,14 @@ colpali-rag-app/
 │   │   └── settings.py
 │   ├── server.py
 │   ├── pyproject.toml
-│   ├── Dockerfile
+│   ├── Dockerfile                      # CPU-only, lightweight (~500MB)
 │   ├── Makefile
 │   └── prompts/
 │       ├── response_1
 │       └── response_2
 │
-├── docker-compose.yml                  # Dev: both services
-├── docker-compose.runpod.yml           # RunPod: VLM with baked-in models + API
+├── docker-compose.yml                  # Dev: both services (VLM + API)
+├── docker-compose.runpod.yml           # Cloud: API only (VLM deployed separately)
 ├── scripts/
 │   └── get_token.py
 └── Makefile                            # Root-level commands

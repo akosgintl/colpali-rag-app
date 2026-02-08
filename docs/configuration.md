@@ -150,7 +150,7 @@ graph TD
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `VLM_SERVICE_URL` | `str` | `http://localhost:8001` | URL of the VLM service |
-| `VLM_TIMEOUT_SECONDS` | `int` | `120` | Timeout for VLM HTTP requests |
+| `VLM_TIMEOUT_SECONDS` | `int` | `480` | Timeout for VLM HTTP requests (.env.example sets 120) |
 
 ### SupabaseSettings (API)
 

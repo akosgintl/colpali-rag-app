@@ -66,13 +66,17 @@ class BaseColpaliLoader(ABC):
 
 ```python
 def _detect_flash_attention(self) -> str | None:
-    if self._device == "cuda":
-        try:
-            import flash_attn
-            return "flash_attention_2"
-        except ImportError:
-            pass
-    return None
+    if self._device != "cuda":
+        return None
+    # Flash Attention 2 requires Ampere+ (compute capability >= 8.0)
+    major, _ = torch.cuda.get_device_capability()
+    if major < 8:
+        return None
+    try:
+        import flash_attn
+        return "flash_attention_2"
+    except ImportError:
+        return None
 ```
 
 ---

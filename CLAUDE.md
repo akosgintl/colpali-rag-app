@@ -27,10 +27,8 @@ colpali-rag-app/
 │   │   └── settings.py
 │   ├── server.py
 │   ├── pyproject.toml
-│   ├── entrypoint.dbc.sh               # Entrypoint: downloads model at container start
-│   ├── Dockerfile.local                # Dev: all models, runtime download
-│   ├── Dockerfile.dbc                  # Dev: optimized for Docker Build Cloud
-│   ├── Dockerfile.runpod               # Prod: baked-in models (~15GB)
+│   ├── entrypoint.sh                   # Entrypoint: downloads model at container start
+│   ├── Dockerfile                      # CUDA 12.8 + stripped deps, entrypoint model download
 │   └── Makefile
 │
 ├── document-api/                       # Document API microservice (CPU)
@@ -65,39 +63,26 @@ colpali-rag-app/
 │       └── response_2
 │
 ├── docker-compose.yml                  # Dev: both services, runtime model download
-├── docker-compose.runpod.yml           # RunPod: VLM with baked-in models + API
+├── docker-compose.runpod.yml           # Cloud: API only (VLM deployed separately)
 └── Makefile                            # Root-level commands
 ```
 
 ## Docker Images
 
-The VLM service has two Dockerfiles:
-
-### Development: `Dockerfile.local`
-- **Use case**: Local development with any supported model
-- **Model loading**: Entrypoint downloads model before app starts (`entrypoint.dbc.sh`)
+### VLM Service: `colpali-vlm/Dockerfile`
+- **Use case**: All environments (development and production)
+- **Model loading**: Entrypoint downloads model before app starts (`entrypoint.sh`)
 - **Storage**: Models cached in Docker volume (`vlm_hf_cache` mounted at `/models`)
 - **Model selection**: Via `.env` var `COLPALI_MODEL_NAME` (read by entrypoint + app)
 - **Base**: CUDA 12.8 + Ubuntu 24.04 + prebuilt flash-attn wheel
-- **Cons**: First startup takes 5-10 minutes for model download
+- **Optimizations**: Multi-stage build with stripped site-packages (no NCCL, Triton, static libs)
+- **Cons**: First startup takes 5-10 minutes for model download (cached after first run)
 - **Usage**: `make docker_up` (default in `docker-compose.yml`)
 
-### Development (DBC): `Dockerfile.dbc`
-- **Use case**: Local development via Docker Build Cloud (stripped deps, smaller image)
-- **Model loading**: Entrypoint downloads model before app starts (`entrypoint.dbc.sh`)
-- **Storage**: Models cached in Docker volume mounted at `/models`
-- **Model selection**: Via `.env` var `COLPALI_MODEL_NAME`
-- **Base**: CUDA 12.8 + Ubuntu 24.04 + prebuilt flash-attn wheel
-- **Difference from local**: Stripped site-packages (no NCCL, cuDNN, Triton) for smaller image
-- **Usage**: `docker build -f Dockerfile.dbc -t colpali-vlm:dbc .`
-
-### Production: `Dockerfile.runpod` (~15GB)
-- **Use case**: RunPod deployment, production environments
-- **Model loading**: Models baked into image during build
-- **Storage**: Self-contained, no external volume needed
-- **Pros**: Fast startup (~30s), predictable, no download dependency
-- **Cons**: Large image size, requires rebuild to change models
-- **Usage**: `make docker_build_vlm_runpod && make docker_push_vlm_runpod`
+### Document API: `document-api/Dockerfile`
+- **Use case**: All environments (CPU-only, ~500MB)
+- **Base**: Python 3.12-slim
+- **Usage**: `make docker_build_api`
 
 ## Commands
 
@@ -116,17 +101,22 @@ make docker_logs                # View logs
 make docker_down                # Stop services
 ```
 
-### RunPod Deployment
+### Cloud Deployment (API only, VLM deployed separately)
 ```bash
-# Test RunPod image locally (with GPU)
-make docker_runpod_up           # Build and start VLM with baked-in models
+make docker_runpod_up           # Start API service only (VLM on remote GPU)
 make docker_runpod_up_detach    # Run in background
 make docker_runpod_logs         # View logs
 make docker_runpod_down         # Stop service
+```
 
-# Build and push images for RunPod
-make docker_build_vlm_runpod    # Build RunPod VLM image (~12GB, baked-in models)
-make docker_push_vlm_runpod     # Push to Docker Hub for RunPod
+### Build & Push Images
+```bash
+make docker_build_vlm           # Build VLM image
+make docker_push_vlm            # Push VLM to Docker Hub
+make docker_build_api           # Build Document API image
+make docker_push_api            # Push API to Docker Hub
+make docker_build_all           # Build both images
+make docker_push_all            # Push both images
 ```
 
 ### Code Quality
@@ -144,11 +134,13 @@ make all                        # All checks + cleanup
 - Input: `multipart/form-data` with `images[]` (JPEG/PNG files)
 - Output: `{"embeddings": [[[float, ...], ...], ...], "processing_time_ms": float}`
 - Returns multi-vectors for each image (128-dim for ColQwen2.5, 320-dim for ColQwen3/TomoroAI)
+- Embeddings are float16 values; responses are GZip-compressed
 
 **POST /embed/query**
 - Input: `{"query": "string"}`
 - Output: `{"embedding": [[float, ...]], "processing_time_ms": float}`
 - Returns multi-vector for query (128-dim for ColQwen2.5, 320-dim for ColQwen3/TomoroAI)
+- Embedding is float16 values; response is GZip-compressed
 
 **GET /health**
 - Output: `{"status": "healthy", "model_loaded": true}`
@@ -249,7 +241,7 @@ SUPABASE_JWT_SECRET=...
 ```
 # VLM Service
 VLM_SERVICE_URL=http://localhost:8001       # or RunPod URL
-VLM_TIMEOUT_SECONDS=120
+VLM_TIMEOUT_SECONDS=120                    # .env default; code fallback is 480
 
 # Qdrant
 QDRANT_URL=...
@@ -332,5 +324,5 @@ PORT=8000
 2. **VLM Client**: Document API uses `VLMClient` (httpx + tenacity) instead of direct model calls
 3. **No colpali-engine**: Document API has no PyTorch/GPU dependencies
 4. **Independent scaling**: API can scale horizontally; VLM scales per GPU
-5. **Three VLM images**: Dev `Dockerfile.local` / `Dockerfile.dbc` (runtime model download via entrypoint), Prod `Dockerfile.runpod` (~15GB, baked-in models)
+5. **Single VLM Dockerfile**: `colpali-vlm/Dockerfile` (CUDA 12.8, stripped deps, entrypoint-based model download)
 6. **API image**: ~500MB (CPU-only, no PyTorch)

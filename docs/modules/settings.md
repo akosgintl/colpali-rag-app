@@ -104,7 +104,7 @@ classDiagram
 
     class VLMSettings {
         +vlm_service_url: str = "http://localhost:8001"
-        +vlm_timeout_seconds: int = 120
+        +vlm_timeout_seconds: int = 480
     }
 
     class SupabaseSettings {
@@ -192,7 +192,7 @@ classDiagram
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `VLM_SERVICE_URL` | `str` | `http://localhost:8001` | VLM service URL |
-| `VLM_TIMEOUT_SECONDS` | `int` | `120` | VLM HTTP request timeout |
+| `VLM_TIMEOUT_SECONDS` | `int` | `480` | VLM HTTP request timeout (.env.example sets 120) |
 
 #### SupabaseSettings (API)
 
