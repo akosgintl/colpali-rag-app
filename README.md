@@ -1,6 +1,6 @@
 <h1 align="center">ColPali RAG App</h1>
 <div align="center">
-    <a align="center" href="https://www.python.org/downloads/release/python-3128/"><img src="https://img.shields.io/badge/python-3.12.8-red"/></a>
+    <a align="center" href="https://www.python.org/downloads/release/python-3110/"><img src="https://img.shields.io/badge/python-3.11%20%7C%203.12-red"/></a>
     <a href="https://fastapi.tiangolo.com/"><img src="https://img.shields.io/badge/FastAPI-0.115.8-009688.svg?style=flat&logo=FastAPI&logoColor=white"/></a>
     <a href="https://github.com/astral-sh/uv"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json"/></a>
     <a href="http://mypy-lang.org/"><img src="http://www.mypy-lang.org/static/mypy_badge.svg"/></a>
@@ -58,7 +58,7 @@ At inference time, the query is sent to the VLM service for embedding, then Qdra
 * [SlowAPI](https://github.com/laurentS/slowapi) (rate limiting)
 
 ### Common
-* Programming Language: [Python 3.12.8](https://www.python.org/)
+* Programming Language: [Python 3.11](https://www.python.org/) (VLM) / [Python 3.12](https://www.python.org/) (Document API)
 * Dependency & Package Manager: [uv](https://docs.astral.sh/uv/)
 * Linters: [Ruff](https://docs.astral.sh/ruff/)
 * Type Checking: [MyPy](https://mypy-lang.org/)
@@ -193,10 +193,10 @@ make dev_api    # Runs on port 8000, connects to VLM on 8001
 
 | Service | Dockerfile | Model Loading | Use Case |
 |---------|-----------|---------------|----------|
-| VLM Service | `colpali-vlm/Dockerfile` | Runtime download via entrypoint | All environments |
-| Document API | `document-api/Dockerfile` | N/A (CPU-only, ~500MB) | All environments |
+| VLM Service | `colpali-vlm/Dockerfile` | Runtime download via entrypoint | All environments (CUDA 12.4, Python 3.11) |
+| Document API | `document-api/Dockerfile` | N/A (CPU-only, ~500MB) | All environments (Python 3.12) |
 
-The VLM image uses a multi-stage build (CUDA 12.8 + stripped deps) and downloads the model at container startup via `entrypoint.sh`. Models are cached in a Docker volume (`vlm_hf_cache`).
+The VLM image uses a multi-stage build (CUDA 12.4 + Ubuntu 22.04 + stripped deps) and downloads the model at container startup via `entrypoint.sh`. Models are cached in a Docker volume (`vlm_hf_cache`).
 
 ### Cloud Deployment (GPU)
 
@@ -216,8 +216,8 @@ The VLM service automatically uses [Flash Attention 2](https://github.com/Dao-AI
 
 **Requirements:**
 - Linux (native or WSL2)
-- NVIDIA GPU with compute capability >= 7.5 (RTX 20xx series or newer)
-- CUDA 11.6+
+- NVIDIA GPU with compute capability >= 8.0 (RTX 30xx / Ampere series or newer)
+- CUDA 12.4+
 
 **Note for Windows users:** Flash Attention 2 is not supported on native Windows. To use it, run the application inside WSL2.
 
@@ -262,7 +262,7 @@ colpali-rag-app/
 │   │   └── settings.py
 │   ├── server.py
 │   ├── pyproject.toml
-│   ├── Dockerfile                      # CUDA 12.8 + stripped deps, entrypoint model download
+│   ├── Dockerfile                      # CUDA 12.4 + stripped deps, entrypoint model download
 │   ├── entrypoint.sh                   # Downloads model at container start
 │   └── Makefile
 │

@@ -1,9 +1,9 @@
 {
   "name": "ColPali RAG App",
-  "description": "Document retrieval using Vision Language Models (ColQwen2.5)",
+  "description": "Document retrieval using Vision Language Models",
   "dockerImage": "YOUR_DOCKERHUB_USERNAME/colpali-rag-app:latest",
   "containerDiskSize": 20,
-  "volumeSize": 0,
+  "volumeSize": 15,
   "ports": "8000/http",
   "env": {
     "QDRANT_URL": "YOUR_QDRANT_URL",

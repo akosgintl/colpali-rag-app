@@ -116,6 +116,10 @@ docker_push_vlm:
 	docker tag colpali-vlm:latest $(DOCKERHUB_USERNAME)/colpali-vlm:latest
 	docker push $(DOCKERHUB_USERNAME)/colpali-vlm:latest
 
+# Build VLM image with Docker Buildx and push to Docker Hub
+docker_buildx_vlm_push:
+	cd colpali-vlm &&  docker buildx build --progress=plain -f .\Dockerfile -t $(DOCKERHUB_USERNAME)/colpali-vlm:latest --push .
+
 # ------------------------------------------------------------------------------
 # Docker Build & Push (Document API)
 # ------------------------------------------------------------------------------
@@ -127,6 +131,10 @@ docker_build_api:
 docker_push_api:
 	docker tag document-api:latest $(DOCKERHUB_USERNAME)/document-api:latest
 	docker push $(DOCKERHUB_USERNAME)/document-api:latest
+
+# Build VLM image with Docker Buildx and push to Docker Hub
+docker_buildx_api_push:
+	cd document-api &&  docker buildx build --progress=plain -f .\Dockerfile -t $(DOCKERHUB_USERNAME)/document-api:latest --push .
 
 # ------------------------------------------------------------------------------
 # Combined Build & Push

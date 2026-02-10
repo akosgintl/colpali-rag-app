@@ -28,7 +28,7 @@ colpali-rag-app/
 │   ├── server.py
 │   ├── pyproject.toml
 │   ├── entrypoint.sh                   # Entrypoint: downloads model at container start
-│   ├── Dockerfile                      # CUDA 12.8 + stripped deps, entrypoint model download
+│   ├── Dockerfile                      # CUDA 12.4 + stripped deps, entrypoint model download
 │   └── Makefile
 │
 ├── document-api/                       # Document API microservice (CPU)
@@ -74,7 +74,7 @@ colpali-rag-app/
 - **Model loading**: Entrypoint downloads model before app starts (`entrypoint.sh`)
 - **Storage**: Models cached in Docker volume (`vlm_hf_cache` mounted at `/models`)
 - **Model selection**: Via `.env` var `COLPALI_MODEL_NAME` (read by entrypoint + app)
-- **Base**: CUDA 12.8 + Ubuntu 24.04 + prebuilt flash-attn wheel
+- **Base**: CUDA 12.4 + Ubuntu 22.04 + prebuilt flash-attn wheel
 - **Optimizations**: Multi-stage build with stripped site-packages (no NCCL, Triton, static libs)
 - **Cons**: First startup takes 5-10 minutes for model download (cached after first run)
 - **Usage**: `make docker_up` (default in `docker-compose.yml`)
@@ -324,5 +324,5 @@ PORT=8000
 2. **VLM Client**: Document API uses `VLMClient` (httpx + tenacity) instead of direct model calls
 3. **No colpali-engine**: Document API has no PyTorch/GPU dependencies
 4. **Independent scaling**: API can scale horizontally; VLM scales per GPU
-5. **Single VLM Dockerfile**: `colpali-vlm/Dockerfile` (CUDA 12.8, stripped deps, entrypoint-based model download)
+5. **Single VLM Dockerfile**: `colpali-vlm/Dockerfile` (CUDA 12.4, stripped deps, entrypoint-based model download)
 6. **API image**: ~500MB (CPU-only, no PyTorch)

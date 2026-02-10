@@ -83,7 +83,7 @@ block-beta
 
 ### Prerequisites
 
-- Python 3.12+
+- Python 3.11+ (VLM service) / Python 3.12.8+ (Document API)
 - [uv](https://github.com/astral-sh/uv) package manager
 - Poppler (for PDF conversion, Document API only)
 - NVIDIA GPU (for VLM service)

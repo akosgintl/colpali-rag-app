@@ -58,7 +58,7 @@ graph TD
 
 ```bash
 # Clone repository
-git clone https://github.com/your-org/colpali-rag-app.git
+git clone https://github.com/jjovalle99/colpali-rag-app.git
 cd colpali-rag-app
 
 # Configure environment for both services
@@ -110,7 +110,7 @@ make all       # All checks + cleanup
 | VLM Service | `colpali-vlm/Dockerfile` | Runtime download via `entrypoint.sh` | All environments |
 | Document API | `document-api/Dockerfile` | N/A (CPU-only, ~500MB) | All environments |
 
-The VLM image uses a multi-stage build (CUDA 12.8 + Ubuntu 24.04 + prebuilt flash-attn) with stripped site-packages for a smaller image. The model is downloaded at container startup and cached in a Docker volume.
+The VLM image uses a multi-stage build (CUDA 12.4 + Ubuntu 22.04 + prebuilt flash-attn) with stripped site-packages for a smaller image. The model is downloaded at container startup and cached in a Docker volume.
 
 ### Docker Compose (Development)
 
@@ -185,7 +185,7 @@ RunPod provides GPU instances ideal for running the VLM service with CUDA accele
 ```mermaid
 graph LR
     subgraph Build["Build Phase"]
-        BuildVLM["Build VLM Image\n(~15GB, baked models)"]
+        BuildVLM["Build VLM Image\n(runtime model download)"]
         BuildAPI["Build API Image\n(~500MB)"]
     end
 
