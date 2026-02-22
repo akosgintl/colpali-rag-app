@@ -52,6 +52,8 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends python3 curl && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Copy uv-managed Python (venv symlinks point here)
+COPY --from=builder /root/.local/share/uv/python /root/.local/share/uv/python
 # Csak a kész venv és a kód átmásolása
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/src /app/src
