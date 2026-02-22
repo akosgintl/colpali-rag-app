@@ -4,12 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-ColPali RAG App is a document retrieval system using Vision Language Models (VLMs). The application is split into two microservices:
+ColPali RAG App is a document retrieval system using Vision Language Models (VLMs). The application is split into three microservices:
 
 1. **colpali-vlm/** - GPU-based VLM embedding service (RunPod deployment)
-2. **document-api/** - CPU-based API orchestration service (local/cloud deployment)
+2. **multimodal_lm/** - GPU-based multimodal LM service running Qwen3-VL-32B-Instruct via vLLM (RunPod deployment)
+3. **document-api/** - CPU-based API orchestration service (local/cloud deployment)
 
-The system uses ColPali models (ColQwen2.5, ColQwen3, or TomoroAI ColQwen3) to generate embeddings directly from document images, preserving visual elements like tables and figures. Qdrant handles vector search, Supabase stores images, and Claude Sonnet 4 generates responses.
+The system uses ColPali models (ColQwen2.5, ColQwen3, or TomoroAI ColQwen3) to generate embeddings directly from document images, preserving visual elements like tables and figures. Qdrant handles vector search, Supabase stores images, and Qwen3-VL-32B-Instruct (served via vLLM) generates responses.
 
 ## Project Structure
 
@@ -31,6 +32,12 @@ colpali-rag-app/
 │   ├── Dockerfile                      # CUDA 12.4 + stripped deps, entrypoint model download
 │   └── Makefile
 │
+├── multimodal_lm/                      # Multimodal LM microservice (GPU)
+│   ├── Dockerfile                      # vLLM-OpenAI base image
+│   ├── entrypoint.sh                   # Downloads model at container start
+│   ├── Makefile
+│   └── .env.example
+│
 ├── document-api/                       # Document API microservice (CPU)
 │   ├── src/doc_api/
 │   │   ├── api/
@@ -47,8 +54,6 @@ colpali-rag-app/
 │   │   │   ├── vlm_client.py           # HTTP client for VLM service
 │   │   │   ├── img_uploader.py
 │   │   │   └── img_downloader.py
-│   │   ├── models/
-│   │   │   └── query_response.py
 │   │   ├── utils/
 │   │   │   ├── prompt_utils.py
 │   │   │   └── qdrant_utils.py
@@ -62,8 +67,8 @@ colpali-rag-app/
 │       ├── response_1
 │       └── response_2
 │
-├── docker-compose.yml                  # Dev: both services, runtime model download
-├── docker-compose.runpod.yml           # Cloud: API only (VLM deployed separately)
+├── docker-compose.yml                  # Dev: all services (VLM + MLM + API)
+├── docker-compose.runpod.yml           # Cloud: API only (VLM and MLM deployed separately)
 └── Makefile                            # Root-level commands
 ```
 
@@ -78,6 +83,16 @@ colpali-rag-app/
 - **Optimizations**: Multi-stage build with stripped site-packages (no NCCL, Triton, static libs)
 - **Cons**: First startup takes 5-10 minutes for model download (cached after first run)
 - **Usage**: `make docker_up` (default in `docker-compose.yml`)
+
+### Multimodal LM Service: `multimodal_lm/Dockerfile`
+- **Use case**: All environments (GPU required)
+- **Model loading**: Entrypoint downloads model before vLLM starts (`entrypoint.sh`)
+- **Storage**: Models cached in Docker volume (`mlm_hf_cache` mounted at `/models`)
+- **Base**: `vllm/vllm-openai:latest`
+- **API**: OpenAI-compatible `/v1/chat/completions` endpoint
+- **Model**: Qwen3-VL-32B-Instruct (configurable via `MULTIMODAL_LM_MODEL_NAME`)
+- **Cons**: First startup takes 10-15 minutes for large model download (~60GB, cached after first run)
+- **Usage**: `make docker_up` or `cd multimodal_lm && make docker_build && make docker_run`
 
 ### Document API: `document-api/Dockerfile`
 - **Use case**: All environments (CPU-only, ~500MB)
@@ -101,9 +116,9 @@ make docker_logs                # View logs
 make docker_down                # Stop services
 ```
 
-### Cloud Deployment (API only, VLM deployed separately)
+### Cloud Deployment (API only, VLM and MLM deployed separately)
 ```bash
-make docker_runpod_up           # Start API service only (VLM on remote GPU)
+make docker_runpod_up           # Start API service only (VLM and MLM on remote GPUs)
 make docker_runpod_up_detach    # Run in background
 make docker_runpod_logs         # View logs
 make docker_runpod_down         # Stop service
@@ -113,10 +128,12 @@ make docker_runpod_down         # Stop service
 ```bash
 make docker_build_vlm           # Build VLM image
 make docker_push_vlm            # Push VLM to Docker Hub
+make docker_build_mlm           # Build Multimodal LM image
+make docker_push_mlm            # Push MLM to Docker Hub
 make docker_build_api           # Build Document API image
 make docker_push_api            # Push API to Docker Hub
-make docker_build_all           # Build both images
-make docker_push_all            # Push both images
+make docker_build_all           # Build all three images
+make docker_push_all            # Push all three images
 ```
 
 ### Code Quality
@@ -161,8 +178,8 @@ make all                        # All checks + cleanup
 1. Query sent to VLM service for embedding
 2. Qdrant searches for similar pages (filtered by session_id)
 3. Images downloaded from Supabase
-4. Images + prompts sent to Claude Sonnet 4
-5. Response streamed back to client
+4. Images + prompts sent to Qwen3-VL-32B-Instruct (via multimodal LM service, OpenAI-compatible API)
+5. Response streamed back to client as Server-Sent Events
 
 ### Qdrant Collection Schema
 
@@ -237,6 +254,18 @@ SUPABASE_KEY=...
 SUPABASE_JWT_SECRET=...
 ```
 
+### multimodal_lm/.env
+```
+# Model
+MULTIMODAL_LM_MODEL_NAME=Qwen/Qwen3-VL-32B-Instruct
+MULTIMODAL_LM_MAX_MODEL_LEN=16384          # Max context length
+MULTIMODAL_LM_TENSOR_PARALLEL=1            # GPU parallelism (1 for single GPU, 2+ for multi-GPU)
+MULTIMODAL_LM_GPU_MEMORY_UTIL=0.90         # GPU memory utilization (0.0-1.0)
+
+# Server
+PORT=8000
+```
+
 ### document-api/.env
 ```
 # VLM Service
@@ -255,11 +284,11 @@ SUPABASE_KEY=...
 SUPABASE_JWT_SECRET=...                     # Required if AUTH_ENABLED=true
 BUCKET=colpali
 
-# Anthropic
-ANTHROPIC_API_KEY=...
-DEFAULT_MODEL=claude-sonnet-4-20250514
-MAX_TOKENS=8192
-TEMPERATURE=0.0
+# Multimodal LM Service
+MULTIMODAL_LM_SERVICE_URL=http://localhost:8002  # or RunPod URL
+MULTIMODAL_LM_MODEL_NAME=Qwen/Qwen3-VL-32B-Instruct
+MULTIMODAL_LM_MAX_TOKENS=8192
+MULTIMODAL_LM_TEMPERATURE=0.0
 
 # Authentication
 AUTH_ENABLED=true
@@ -282,7 +311,7 @@ QUERY_ENDPOINT_TIMEOUT_SECONDS=180
 # Integration Timeouts
 QDRANT_TIMEOUT_SECONDS=60
 SUPABASE_TIMEOUT_SECONDS=120
-ANTHROPIC_TIMEOUT_SECONDS=180
+MULTIMODAL_LM_TIMEOUT_SECONDS=180
 PDF_CONVERSION_TIMEOUT_SECONDS=120
 
 # Server
@@ -320,9 +349,10 @@ PORT=8000
 
 ## Key Differences from Monolith
 
-1. **VLM Service**: Separate GPU service handles all model inference
-2. **VLM Client**: Document API uses `VLMClient` (httpx + tenacity) instead of direct model calls
-3. **No colpali-engine**: Document API has no PyTorch/GPU dependencies
-4. **Independent scaling**: API can scale horizontally; VLM scales per GPU
-5. **Single VLM Dockerfile**: `colpali-vlm/Dockerfile` (CUDA 12.4, stripped deps, entrypoint-based model download)
-6. **API image**: ~500MB (CPU-only, no PyTorch)
+1. **VLM Service**: Separate GPU service handles all embedding inference
+2. **Multimodal LM Service**: Separate GPU service handles response generation via vLLM (OpenAI-compatible API)
+3. **VLM Client**: Document API uses `VLMClient` (httpx + tenacity) instead of direct model calls
+4. **OpenAI Client**: Document API uses `AsyncOpenAI` to communicate with the multimodal LM service
+5. **No colpali-engine or Anthropic**: Document API has no PyTorch/GPU/Anthropic dependencies
+6. **Independent scaling**: API can scale horizontally; VLM and MLM scale per GPU
+7. **Three Dockerfiles**: VLM (CUDA 12.4), MLM (vLLM-OpenAI), API (CPU-only ~500MB)

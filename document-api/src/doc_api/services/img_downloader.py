@@ -2,7 +2,6 @@ import asyncio
 import base64
 import time
 
-import instructor
 from loguru import logger
 from supabase.client import AsyncClient as SupabaseAsyncClient
 
@@ -64,25 +63,15 @@ class SupabaseJPEGDownloader:
         )
         return results
 
-    async def download_instructor_images(
+    async def download_base64_images(
         self, filenames: list[str]
-    ) -> list[instructor.Image]:
+    ) -> list[str]:
+        """Download images and return as base64-encoded JPEG strings."""
         logger.info(
-            "Converting {} images to instructor format", len(filenames)
+            "Converting {} images to base64 format", len(filenames)
         )
         images_bytes = await self.download_images(paths=filenames)
-        return bytes_list_to_instructor_images(images_bytes=images_bytes)
-
-
-def bytes_to_instructor_image(image_bytes: bytes) -> instructor.Image:
-    base64_str = base64.b64encode(image_bytes).decode("utf-8")
-    return instructor.Image.from_raw_base64(base64_str)
-
-
-def bytes_list_to_instructor_images(
-    images_bytes: list[bytes],
-) -> list[instructor.Image]:
-    return [
-        bytes_to_instructor_image(image_bytes=img_bytes)
-        for img_bytes in images_bytes
-    ]
+        return [
+            base64.b64encode(img_bytes).decode("utf-8")
+            for img_bytes in images_bytes
+        ]

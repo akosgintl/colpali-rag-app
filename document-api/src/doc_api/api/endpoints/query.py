@@ -4,17 +4,16 @@ from typing import Annotated, Any, AsyncIterator
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
-from instructor import AsyncInstructor
 from loguru import logger
+from openai import AsyncOpenAI
 from pydantic import UUID4
 from qdrant_client import AsyncQdrantClient, models
 
 from doc_api.api.auth import get_current_user
 from doc_api.api.dependencies import (
-    get_auth_token,
     get_collection_name,
-    get_instructor_client,
     get_llm_config,
+    get_openai_client,
     get_prompts,
     get_qdrant_client,
     get_qdrant_semaphore,
@@ -23,7 +22,6 @@ from doc_api.api.dependencies import (
     get_vlm_client,
 )
 from doc_api.api.rate_limit import get_query_rate_limit, limiter
-from doc_api.models.query_response import FinalResponse
 from doc_api.services.img_downloader import SupabaseJPEGDownloader
 from doc_api.services.vlm_client import VLMClient, VLMClientError
 from doc_api.settings import Settings
@@ -36,25 +34,23 @@ class QueryController:
         self,
         vlm_client: VLMClient,
         downloader: SupabaseJPEGDownloader,
-        instructor_client: AsyncInstructor,
+        openai_client: AsyncOpenAI,
         qdrant_client: AsyncQdrantClient,
         collection_name: str,
         prompts: dict[str, str],
         qdrant_semaphore: asyncio.Semaphore,
         llm_config: dict[str, Any],
         settings: Settings,
-        auth_token: str | None = None,
     ) -> None:
         self.vlm_client = vlm_client
         self.downloader = downloader
-        self.instructor_client = instructor_client
+        self.openai_client = openai_client
         self.qdrant_client = qdrant_client
         self.collection_name = collection_name
         self.prompts = prompts
         self.qdrant_semaphore = qdrant_semaphore
         self.llm_config = llm_config
         self.settings = settings
-        self.auth_token = auth_token
 
     async def query(
         self, query: str, top_k: int, session_id: UUID4
@@ -91,11 +87,8 @@ class QueryController:
             # Close the generator to clean up resources
             await generator.aclose()
             # Yield error message as final chunk
-            error_response = {
-                "references": [],
-                "answer": f"Query timed out after {timeout} seconds",
-            }
-            yield FinalResponse(**error_response).model_dump_json() + "\n"
+            yield f"data: [ERROR] Query timed out after {timeout} seconds\n\n"
+            yield "data: [DONE]\n\n"
         except Exception:
             # Ensure generator is closed on any other exception
             await generator.aclose()
@@ -108,9 +101,7 @@ class QueryController:
 
         try:
             # Call VLM service for query embedding
-            query_embedding = await self.vlm_client.embed_query(
-                query, auth_token=self.auth_token
-            )
+            query_embedding = await self.vlm_client.embed_query(query)
         except VLMClientError as e:
             logger.error(
                 "VLM query embedding failed | session_id={} | error={}",
@@ -182,46 +173,55 @@ class QueryController:
         ]
 
         download_start = time.perf_counter()
-        instructor_images = await self.downloader.download_instructor_images(
+        base64_images = await self.downloader.download_base64_images(
             filenames=filenames
         )
         download_time = time.perf_counter() - download_start
         logger.info(
             "Images downloaded | count={} | time_ms={:.2f}",
-            len(instructor_images),
+            len(base64_images),
             download_time * 1000,
         )
 
         prompt_1 = self.prompts["prompt1"]
-        prompt_2 = self.prompts["prompt2"]
+        prompt_2 = self.prompts["prompt2"].replace("{{ query }}", query)
 
-        query_content: list[str | object] = [prompt_1]
-        for filename, image in zip(filenames, instructor_images):
-            query_content.extend(
-                [f'\t<image file="{filename}">', image, "\t</image>"]
+        # Build OpenAI vision message content
+        content: list[dict[str, Any]] = [{"type": "text", "text": prompt_1}]
+        for filename, b64_image in zip(filenames, base64_images):
+            content.append({"type": "text", "text": f'Image: "{filename}"'})
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{b64_image}",
+                    },
+                }
             )
-        query_content.append(prompt_2)
+        content.append({"type": "text", "text": prompt_2})
 
         logger.info(
             "Starting LLM streaming | session_id={} | images={}",
             session_id,
-            len(instructor_images),
+            len(base64_images),
         )
 
-        stream = self.instructor_client.completions.create_partial(
+        stream = await self.openai_client.chat.completions.create(
             model=self.llm_config["model"],
-            response_model=FinalResponse,
-            messages=[{"role": "user", "content": query_content}],  # type: ignore
-            context={"query": query},
+            messages=[{"role": "user", "content": content}],
             temperature=self.llm_config["temperature"],
             max_tokens=self.llm_config["max_tokens"],
-            max_retries=3,
+            stream=True,
         )
 
         chunk_count = 0
-        async for partial in stream:
-            chunk_count += 1
-            yield partial.model_dump_json() + "\n"
+        async for chunk in stream:
+            delta = chunk.choices[0].delta
+            if delta.content:
+                chunk_count += 1
+                yield f"data: {delta.content}\n\n"
+
+        yield "data: [DONE]\n\n"
 
         total_time = time.perf_counter() - request_start
         logger.info(
@@ -243,29 +243,27 @@ async def query_endpoint(
     downloader: Annotated[
         SupabaseJPEGDownloader, Depends(get_supabase_downloader)
     ],
-    instructor_client: Annotated[
-        AsyncInstructor, Depends(get_instructor_client)
-    ],
+    openai_client: Annotated[AsyncOpenAI, Depends(get_openai_client)],
     qdrant_client: Annotated[AsyncQdrantClient, Depends(get_qdrant_client)],
     collection_name: Annotated[str, Depends(get_collection_name)],
     prompts: Annotated[dict[str, str], Depends(get_prompts)],
-    qdrant_semaphore: Annotated[asyncio.Semaphore, Depends(get_qdrant_semaphore)],
+    qdrant_semaphore: Annotated[
+        asyncio.Semaphore, Depends(get_qdrant_semaphore)
+    ],
     llm_config: Annotated[dict[str, Any], Depends(get_llm_config)],
     settings: Annotated[Settings, Depends(get_settings_from_state)],
     current_user: Annotated[dict | None, Depends(get_current_user)],
-    auth_token: Annotated[str | None, Depends(get_auth_token)],
 ):
     controller = QueryController(
         vlm_client=vlm_client,
         downloader=downloader,
-        instructor_client=instructor_client,
+        openai_client=openai_client,
         qdrant_client=qdrant_client,
         collection_name=collection_name,
         prompts=prompts,
         qdrant_semaphore=qdrant_semaphore,
         llm_config=llm_config,
         settings=settings,
-        auth_token=auth_token,
     )
     return StreamingResponse(
         controller.query(query, top_k, session_id),

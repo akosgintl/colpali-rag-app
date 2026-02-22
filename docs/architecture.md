@@ -1,6 +1,6 @@
 # Architecture Overview
 
-This document describes the two-service architecture of the ColPali RAG App.
+This document describes the three-service architecture of the ColPali RAG App.
 
 ## High-Level Architecture
 
@@ -16,6 +16,7 @@ graph TB
         APIDeps["Dependency Injection"]
         APILifespan["Lifespan Manager"]
         VLMClient["VLM Client (httpx)"]
+        OpenAIClient["OpenAI Client (AsyncOpenAI)"]
     end
 
     subgraph VLMService["VLM Service (:8001)"]
@@ -25,10 +26,14 @@ graph TB
         Model["ColQwen2.5 / ColQwen3 / TomoroAI"]
     end
 
+    subgraph MLMService["Multimodal LM Service (:8002)"]
+        VLLM["vLLM Server"]
+        Qwen["Qwen3-VL-32B-Instruct"]
+    end
+
     subgraph External["External Services"]
         Qdrant["Qdrant Vector DB"]
         Supabase["Supabase Storage"]
-        Anthropic["Claude Sonnet 4"]
     end
 
     CLI --> APIRouter
@@ -36,13 +41,15 @@ graph TB
     APIRouter --> APIDeps
     APIDeps --> APILifespan
     APILifespan --> VLMClient
+    APILifespan --> OpenAIClient
     VLMClient -->|HTTP| VLMRouter
     VLMRouter --> VLMDeps
     VLMDeps --> VLMLifespan
     VLMLifespan --> Model
+    OpenAIClient -->|HTTP /v1/chat/completions| VLLM
+    VLLM --> Qwen
     APILifespan --> Qdrant
     APILifespan --> Supabase
-    APILifespan --> Anthropic
 ```
 
 ## Component Architecture
@@ -59,7 +66,7 @@ graph TD
     subgraph Dependencies["Dependencies"]
         dep1["get_qdrant_client"]
         dep2["get_vlm_client"]
-        dep3["get_instructor_client"]
+        dep3["get_openai_client"]
         dep4["get_auth_token"]
     end
 
@@ -139,11 +146,17 @@ colpali-rag-app/
 │       └── colpali/
 │           └── loaders.py              # Multi-model loader factory
 │
+├── multimodal_lm/                      # Multimodal LM microservice (GPU)
+│   ├── Dockerfile                      # vLLM-OpenAI base image
+│   ├── entrypoint.sh                   # Model download + vLLM launch
+│   ├── Makefile
+│   └── .env.example
+│
 ├── document-api/                       # Document API microservice (CPU)
 │   ├── server.py                       # Application entry point
 │   ├── prompts/
-│   │   ├── response_1                  # System prompt part 1
-│   │   └── response_2                  # System prompt part 2
+│   │   ├── response_1                  # System prompt
+│   │   └── response_2                  # User prompt template
 │   └── src/doc_api/
 │       ├── settings.py                 # Configuration
 │       ├── logging_config.py           # Logging setup
@@ -161,8 +174,6 @@ colpali-rag-app/
 │       │   ├── vlm_client.py           # HTTP client for VLM service
 │       │   ├── img_uploader.py         # Upload service
 │       │   └── img_downloader.py       # Download service
-│       ├── models/
-│       │   └── query_response.py       # Response models
 │       └── utils/
 │           ├── prompt_utils.py         # Prompt loading
 │           └── qdrant_utils.py         # Qdrant helpers
@@ -204,6 +215,7 @@ sequenceDiagram
     participant Life as Lifespan Manager
     participant State as State Factory
     participant VLM as VLM Service
+    participant MLM as Multimodal LM Service
 
     Note over App: Document API Startup
     App->>Life: Enter lifespan context
@@ -211,11 +223,14 @@ sequenceDiagram
     Life->>Life: Create VLMClient
     Life->>VLM: health_check() (retry up to 30 attempts)
     VLM-->>Life: Healthy
+    Life->>MLM: health_check() (retry up to 30 attempts)
+    MLM-->>Life: Healthy
     Life->>State: Create Qdrant client
-    Life->>State: Create Anthropic client
+    Life->>State: Create OpenAI client (for multimodal LM)
     Life->>State: Create Supabase client
     Life->>Life: Create uploader/downloader
     Life->>Life: Create Qdrant semaphore (10)
+    Life->>Life: Load LLM config
     Life-->>App: Yield State dict
 
     Note over App: Document API Running
@@ -225,7 +240,7 @@ sequenceDiagram
     App->>Life: Exit lifespan context
     Life->>Life: Close VLM client
     Life->>Life: Close Qdrant client
-    Life->>Life: Close Anthropic client
+    Life->>Life: Close OpenAI client
 ```
 
 ## State Management
@@ -249,7 +264,7 @@ sequenceDiagram
 | `vlm_client` | `VLMClient` | HTTP client for VLM service |
 | `supabase_uploader` | `SupabaseJPEGUploader` | Image upload service |
 | `supabase_downloader` | `SupabaseJPEGDownloader` | Image download service |
-| `instructor_client` | `AsyncInstructor` | Structured LLM client |
+| `openai_client` | `AsyncOpenAI` | Client for multimodal LM service |
 | `qdrant_client` | `AsyncQdrantClient` | Vector DB client |
 | `collection_name` | `str` | Qdrant collection name |
 | `qdrant_semaphore` | `asyncio.Semaphore` | Concurrency control for Qdrant (10) |
@@ -267,7 +282,7 @@ sequenceDiagram
 | `get_supabase_uploader` | `SupabaseJPEGUploader` | `request.state.supabase_uploader` |
 | `get_supabase_downloader` | `SupabaseJPEGDownloader` | `request.state.supabase_downloader` |
 | `get_collection_name` | `str` | `request.state.collection_name` |
-| `get_instructor_client` | `AsyncInstructor` | `request.state.instructor_client` |
+| `get_openai_client` | `AsyncOpenAI` | `request.state.openai_client` |
 | `get_qdrant_semaphore` | `asyncio.Semaphore` | `request.state.qdrant_semaphore` |
 | `get_llm_config` | `dict[str, Any]` | `request.state.llm_config` |
 | `get_settings_from_state` | `Settings` | `request.state.settings` |
@@ -287,12 +302,13 @@ sequenceDiagram
 
 ## Inter-Service Communication
 
-The Document API communicates with the VLM service via HTTP using `VLMClient` (httpx + tenacity retry):
+The Document API communicates with the VLM service via HTTP using `VLMClient` (httpx + tenacity retry), and with the multimodal LM service via `AsyncOpenAI` (OpenAI-compatible API):
 
 ```mermaid
 graph LR
     subgraph DocAPI["Document API"]
         Client["VLMClient"]
+        OAI["AsyncOpenAI"]
     end
 
     subgraph VLMService["VLM Service"]
@@ -301,16 +317,22 @@ graph LR
         Health["/health"]
     end
 
+    subgraph MLMService["Multimodal LM Service"]
+        Chat["/v1/chat/completions"]
+        MLMHealth["/health"]
+    end
+
     Client -->|"POST (retry x3)"| Embed
     Client -->|"POST (retry x3)"| Query
     Client -->|"GET"| Health
+    OAI -->|"POST (stream)"| Chat
 ```
 
-**Error types:** `VLMClientError`, `VLMServiceUnavailable`, `VLMInferenceError`
+**VLM error types:** `VLMClientError`, `VLMServiceUnavailable`, `VLMInferenceError`
 
 ## Design Patterns
 
-1. **Microservice Pattern**: GPU inference isolated from CPU orchestration
+1. **Microservice Pattern**: GPU inference isolated from CPU orchestration (three independent services)
 2. **Factory Pattern**: `get_loader()` creates appropriate model loader; client factories in `state.py`
 3. **Dependency Injection**: FastAPI's `Depends()` provides loose coupling
 4. **Context Manager Pattern**: Lifespan context managers for resource initialization and cleanup

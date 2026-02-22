@@ -3,10 +3,10 @@ import time
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, TypedDict
 
-import instructor
+import httpx
 from fastapi import FastAPI
-from instructor import AsyncInstructor
 from loguru import logger
+from openai import AsyncOpenAI
 from qdrant_client import AsyncQdrantClient
 from tenacity import (
     retry,
@@ -16,7 +16,7 @@ from tenacity import (
 )
 
 from doc_api.api.state import (
-    create_anthropic_client,
+    create_openai_client,
     create_qdrant_client,
     create_supabase_client,
 )
@@ -30,7 +30,7 @@ class State(TypedDict):
     vlm_client: VLMClient
     supabase_uploader: SupabaseJPEGUploader
     supabase_downloader: SupabaseJPEGDownloader
-    instructor_client: AsyncInstructor
+    openai_client: AsyncOpenAI
     qdrant_client: AsyncQdrantClient
     collection_name: str
     qdrant_semaphore: asyncio.Semaphore
@@ -51,6 +51,19 @@ async def _wait_for_vlm_health(vlm_client: VLMClient, url: str) -> bool:
     return is_healthy
 
 
+async def _check_mlm_health(url: str) -> bool:
+    """
+    Check if the multimodal LM service is healthy.
+    Returns True if healthy, False otherwise.
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(f"{url}/health", timeout=10.0)
+            return resp.status_code == 200
+    except Exception:
+        return False
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[State]:
     startup_start = time.perf_counter()
@@ -59,26 +72,29 @@ async def lifespan(app: FastAPI) -> AsyncIterator[State]:
     logger.info("Loading settings")
     settings = get_settings()
 
-    logger.info(
-        "Creating VLM client | url={}", settings.vlm.vlm_service_url
-    )
+    logger.info("Creating VLM client | url={}", settings.vlm.vlm_service_url)
     vlm_client = VLMClient(
         base_url=settings.vlm.vlm_service_url,
         timeout_seconds=settings.vlm.vlm_timeout_seconds,
+        api_key=settings.vlm.vlm_api_key or None,
     )
 
     # Wait for VLM service to become healthy with retry logic
     logger.info("Waiting for VLM service to become ready...")
-    
+
     @retry(
         retry=retry_if_result(lambda x: not x),  # Retry if result is False
         stop=stop_after_attempt(30),  # 30 attempts
-        wait=wait_exponential(multiplier=2, min=2, max=30),  # 2s, 4s, 8s, 16s, 30s, ...
+        wait=wait_exponential(
+            multiplier=2, min=2, max=30
+        ),  # 2s, 4s, 8s, 16s, 30s, ...
         reraise=False,
     )
     async def wait_for_vlm() -> bool:
-        return await _wait_for_vlm_health(vlm_client, settings.vlm.vlm_service_url)
-    
+        return await _wait_for_vlm_health(
+            vlm_client, settings.vlm.vlm_service_url
+        )
+
     vlm_healthy = await wait_for_vlm()
     if not vlm_healthy:
         logger.error(
@@ -89,13 +105,42 @@ async def lifespan(app: FastAPI) -> AsyncIterator[State]:
             f"VLM service not available at {settings.vlm.vlm_service_url}"
         )
 
+    # Wait for multimodal LM service to become healthy
+    mlm_url = settings.multimodal_lm.multimodal_lm_service_url
+    logger.info(
+        "Waiting for multimodal LM service to become ready... | url={}", mlm_url
+    )
+
+    @retry(
+        retry=retry_if_result(lambda x: not x),
+        stop=stop_after_attempt(30),
+        wait=wait_exponential(multiplier=2, min=2, max=30),
+        reraise=False,
+    )
+    async def wait_for_mlm() -> bool:
+        is_healthy = await _check_mlm_health(mlm_url)
+        if is_healthy:
+            logger.info("Multimodal LM service is healthy | url={}", mlm_url)
+        else:
+            logger.warning(
+                "Multimodal LM service not ready yet, retrying... | url={}",
+                mlm_url,
+            )
+        return is_healthy
+
+    mlm_healthy = await wait_for_mlm()
+    if not mlm_healthy:
+        logger.error(
+            "Multimodal LM service failed to become healthy after retries | url={}",
+            mlm_url,
+        )
+        raise RuntimeError(f"Multimodal LM service not available at {mlm_url}")
+
     logger.info("Creating Qdrant client")
     qdrant_client = create_qdrant_client(settings=settings)
 
-    logger.info("Creating Anthropic client")
-    anthropic_client = create_anthropic_client(settings=settings)
-    logger.info("Creating Instructor client")
-    instructor_client = instructor.from_anthropic(client=anthropic_client)
+    logger.info("Creating OpenAI client for multimodal LM")
+    openai_client = create_openai_client(settings=settings)
 
     logger.info(
         "Creating Supabase client | bucket={}", settings.supabase.bucket
@@ -125,9 +170,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[State]:
 
     logger.info("Loading LLM config")
     llm_config = {
-        "model": settings.anthropic.default_model,
-        "max_tokens": settings.anthropic.max_tokens,
-        "temperature": settings.anthropic.temperature,
+        "model": settings.multimodal_lm.multimodal_lm_model_name,
+        "max_tokens": settings.multimodal_lm.multimodal_lm_max_tokens,
+        "temperature": settings.multimodal_lm.multimodal_lm_temperature,
     }
     logger.info("LLM config loaded | model={}", llm_config["model"])
 
@@ -142,7 +187,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[State]:
         "vlm_client": vlm_client,
         "supabase_uploader": supabase_uploader,
         "supabase_downloader": supabase_downloader,
-        "instructor_client": instructor_client,
+        "openai_client": openai_client,
         "qdrant_client": qdrant_client,
         "collection_name": settings.qdrant.collection_name,
         "qdrant_semaphore": qdrant_semaphore,
@@ -155,6 +200,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[State]:
     logger.info("VLM client closed")
     await qdrant_client.close()
     logger.info("Qdrant client closed")
-    await anthropic_client.close()
-    logger.info("Anthropic client closed")
+    await openai_client.close()
+    logger.info("OpenAI client closed")
     logger.success("Document API shutdown complete")

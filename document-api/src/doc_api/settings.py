@@ -17,6 +17,7 @@ class VLMSettings(BaseSettings):
 
     vlm_service_url: str = "http://localhost:8001"
     vlm_timeout_seconds: int = 480  # 8 minutes - allows for slow VLM processing while staying under ingest timeout (600s)
+    vlm_api_key: str = ""
 
 
 class SupabaseSettings(BaseSettings):
@@ -28,13 +29,13 @@ class SupabaseSettings(BaseSettings):
     bucket: str = "colpali"
 
 
-class AnthropicSettings(BaseSettings):
+class MultimodalLMSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    anthropic_api_key: str = ""
-    default_model: str = "claude-sonnet-4-20250514"
-    max_tokens: int = 8192
-    temperature: float = 0.0
+    multimodal_lm_service_url: str = "http://localhost:8002"
+    multimodal_lm_model_name: str = "Qwen/Qwen3-VL-32B-Instruct"
+    multimodal_lm_max_tokens: int = 8192
+    multimodal_lm_temperature: float = 0.0
 
 
 class ProcessingSettings(BaseSettings):
@@ -56,7 +57,7 @@ class TimeoutSettings(BaseSettings):
     # Integration-specific timeouts
     qdrant_timeout_seconds: int = 60
     supabase_timeout_seconds: int = 120
-    anthropic_timeout_seconds: int = 180
+    multimodal_lm_timeout_seconds: int = 180
 
     # Processing timeouts
     pdf_conversion_timeout_seconds: int = 120
@@ -88,7 +89,7 @@ class Settings(BaseSettings):
     qdrant: QdrantSettings = QdrantSettings()
     vlm: VLMSettings = VLMSettings()
     supabase: SupabaseSettings = SupabaseSettings()
-    anthropic: AnthropicSettings = AnthropicSettings()
+    multimodal_lm: MultimodalLMSettings = MultimodalLMSettings()
     processing: ProcessingSettings = ProcessingSettings()
     timeout: TimeoutSettings = TimeoutSettings()
     rate_limit: RateLimitSettings = RateLimitSettings()

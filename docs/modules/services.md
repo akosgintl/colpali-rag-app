@@ -174,7 +174,7 @@ classDiagram
         +__init__(client, bucket_name, timeout_seconds)
         +download_image(filename) bytes
         +download_images(paths) list[bytes]
-        +download_instructor_images(filenames) list[instructor.Image]
+        +download_base64_images(filenames) list[str]
     }
 ```
 
@@ -188,9 +188,9 @@ Downloads a single image with timeout.
 
 Downloads multiple images concurrently using `asyncio.gather`.
 
-#### `download_instructor_images(filenames) -> list[instructor.Image]`
+#### `download_base64_images(filenames) -> list[str]`
 
-Downloads images and converts to Instructor format (base64 encoded) for Claude.
+Downloads images and returns as base64-encoded JPEG strings for use with the multimodal LM service.
 
 ---
 
@@ -226,5 +226,5 @@ await uploader.upload_images(session_id, "report.pdf", images, start=1)
 
 # Download images
 downloader = SupabaseJPEGDownloader(supabase_client, "colpali", timeout_seconds=120)
-instructor_images = await downloader.download_instructor_images(paths)
+instructor_images = await downloader.download_base64_images(paths)
 ```

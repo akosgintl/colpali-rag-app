@@ -123,7 +123,7 @@ Factory functions for creating async clients:
 |----------|---------|-------------|
 | `create_qdrant_client(settings)` | `AsyncQdrantClient` | With connection pooling (20 max, 10 keepalive) |
 | `create_supabase_client(settings)` | `SupabaseAsyncClient` | With httpx timeout config |
-| `create_anthropic_client(settings)` | `AsyncAnthropic` | With httpx timeout config |
+| `create_openai_client(settings)` | `AsyncOpenAI (for multimodal LM)` | With httpx timeout config |
 
 ### lifespan.py - Client Initialization
 
@@ -132,7 +132,7 @@ class State(TypedDict):
     vlm_client: VLMClient
     supabase_uploader: SupabaseJPEGUploader
     supabase_downloader: SupabaseJPEGDownloader
-    instructor_client: AsyncInstructor
+    openai_client: AsyncOpenAI
     qdrant_client: AsyncQdrantClient
     collection_name: str
     qdrant_semaphore: asyncio.Semaphore
@@ -142,13 +142,13 @@ class State(TypedDict):
 
 The lifespan:
 1. Creates `VLMClient` and waits for VLM service health (retry 30 attempts, exponential backoff 2-30s)
-2. Creates Qdrant, Anthropic, and Supabase clients
-3. Creates Instructor client from Anthropic
+2. Waits for multimodal LM service health (retry 30 attempts, exponential backoff 2-30s)
+3. Creates Qdrant, OpenAI (for multimodal LM), and Supabase clients
 4. Creates uploader/downloader services
 5. Creates Qdrant semaphore (10 concurrent)
 6. Loads LLM config (model, max_tokens, temperature)
 
-On shutdown: closes VLM client, Qdrant client, and Anthropic client.
+On shutdown: closes VLM client, Qdrant client, and OpenAI client.
 
 ### dependencies.py
 
@@ -159,7 +159,7 @@ On shutdown: closes VLM client, Qdrant client, and Anthropic client.
 | `get_supabase_uploader` | `SupabaseJPEGUploader` | `request.state.supabase_uploader` |
 | `get_supabase_downloader` | `SupabaseJPEGDownloader` | `request.state.supabase_downloader` |
 | `get_collection_name` | `str` | `request.state.collection_name` |
-| `get_instructor_client` | `AsyncInstructor` | `request.state.instructor_client` |
+| `get_openai_client` | `AsyncOpenAI` | `request.state.openai_client` |
 | `get_qdrant_semaphore` | `asyncio.Semaphore` | `request.state.qdrant_semaphore` |
 | `get_llm_config` | `dict[str, Any]` | `request.state.llm_config` |
 | `get_settings_from_state` | `Settings` | `request.state.settings` |
@@ -204,8 +204,9 @@ Auth token is forwarded to VLM service.
 `QueryController` handles queries:
 1. Calls `vlm_client.embed_query()` for query embedding
 2. Searches Qdrant with session_id filter
-3. Downloads images from Supabase
-4. Constructs prompt with images and system prompts
-5. Streams response via Instructor's `create_partial()`
+3. Downloads images from Supabase as base64
+4. Constructs OpenAI vision messages with images and system prompts
+5. Streams response via `openai_client.chat.completions.create(stream=True)`
+6. Returns Server-Sent Events with `data: [DONE]` terminator
 
 Auth token is forwarded to VLM service.

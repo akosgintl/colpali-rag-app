@@ -33,14 +33,22 @@ class VLMInferenceError(VLMClientError):
 class VLMClient:
     """HTTP client for communicating with the VLM embedding service."""
 
-    def __init__(self, base_url: str, timeout_seconds: int = 120):
+    def __init__(
+        self,
+        base_url: str,
+        timeout_seconds: int = 120,
+        api_key: str | None = None,
+    ):
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
+        self._api_key = api_key
         # httpx automatically handles gzip compression (sends Accept-Encoding header
         # and decompresses responses transparently)
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(float(timeout_seconds)),
-            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+            limits=httpx.Limits(
+                max_connections=10, max_keepalive_connections=5
+            ),
         )
         logger.info(
             "VLMClient initialized | base_url={} | timeout={}s",
@@ -48,11 +56,11 @@ class VLMClient:
             timeout_seconds,
         )
 
-    def _get_headers(self, auth_token: str | None = None) -> dict[str, str]:
+    def _get_headers(self) -> dict[str, str]:
         """Build headers for VLM service requests."""
         headers: dict[str, str] = {}
-        if auth_token:
-            headers["Authorization"] = f"Bearer {auth_token}"
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
 
     async def close(self) -> None:
@@ -88,14 +96,13 @@ class VLMClient:
         reraise=True,
     )
     async def embed_images(
-        self, images: list[Image.Image], auth_token: str | None = None
+        self, images: list[Image.Image]
     ) -> list[list[list[float]]]:
         """
         Generate embeddings for a list of images.
 
         Args:
             images: List of PIL Images
-            auth_token: Optional JWT token to forward to VLM service
 
         Returns:
             List of embeddings, each being a list of 128-dim vectors (multi-vector)
@@ -111,13 +118,15 @@ class VLMClient:
                 img = img.convert("RGB")
             img.save(buffer, format="JPEG", quality=95)
             buffer.seek(0)
-            files.append(("images", (f"image_{idx}.jpeg", buffer, "image/jpeg")))
+            files.append(
+                ("images", (f"image_{idx}.jpeg", buffer, "image/jpeg"))
+            )
 
         try:
             response = await self._client.post(
                 f"{self.base_url}/embed/images",
                 files=files,
-                headers=self._get_headers(auth_token),
+                headers=self._get_headers(),
             )
             response.raise_for_status()
         except httpx.TimeoutException as e:
@@ -164,15 +173,12 @@ class VLMClient:
         wait=wait_exponential(multiplier=1, min=1, max=10),
         reraise=True,
     )
-    async def embed_query(
-        self, query: str, auth_token: str | None = None
-    ) -> list[list[float]]:
+    async def embed_query(self, query: str) -> list[list[float]]:
         """
         Generate embedding for a text query.
 
         Args:
             query: Query string
-            auth_token: Optional JWT token to forward to VLM service
 
         Returns:
             Multi-vector embedding (list of 128-dim vectors)
@@ -186,7 +192,7 @@ class VLMClient:
             response = await self._client.post(
                 f"{self.base_url}/embed/query",
                 json={"query": query},
-                headers=self._get_headers(auth_token),
+                headers=self._get_headers(),
             )
             response.raise_for_status()
         except httpx.TimeoutException as e:

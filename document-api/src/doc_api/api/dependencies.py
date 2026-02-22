@@ -1,11 +1,10 @@
 import asyncio
 from functools import lru_cache
-from typing import Annotated, Any
+from typing import Any
 
-from fastapi import Depends, Request
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from instructor import AsyncInstructor
+from fastapi import Request
 from loguru import logger
+from openai import AsyncOpenAI
 from qdrant_client import AsyncQdrantClient
 
 from doc_api.services.img_downloader import SupabaseJPEGDownloader
@@ -13,8 +12,6 @@ from doc_api.services.img_uploader import SupabaseJPEGUploader
 from doc_api.services.vlm_client import VLMClient
 from doc_api.settings import Settings
 from doc_api.utils.prompt_utils import read_prompt_from_plain_file
-
-security = HTTPBearer(auto_error=False)
 
 
 async def get_vlm_client(request: Request) -> VLMClient:
@@ -37,8 +34,8 @@ async def get_collection_name(request: Request) -> str:
     return request.state.collection_name
 
 
-async def get_instructor_client(request: Request) -> AsyncInstructor:
-    return request.state.instructor_client
+async def get_openai_client(request: Request) -> AsyncOpenAI:
+    return request.state.openai_client
 
 
 async def get_qdrant_semaphore(request: Request) -> asyncio.Semaphore:
@@ -64,12 +61,3 @@ def get_prompts():
         len(prompt2),
     )
     return {"prompt1": prompt1, "prompt2": prompt2}
-
-
-async def get_auth_token(
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
-) -> str | None:
-    """Extract the raw JWT token from the Authorization header."""
-    if credentials is None:
-        return None
-    return credentials.credentials

@@ -1,6 +1,6 @@
 # API Reference
 
-This document provides detailed documentation for all API endpoints across both services.
+This document provides detailed documentation for all API endpoints across all services.
 
 ## Services Overview
 
@@ -8,6 +8,7 @@ This document provides detailed documentation for all API endpoints across both 
 |---------|----------|-------------|
 | Document API | `http://localhost:8000` | PDF ingestion, querying, health check |
 | VLM Service | `http://localhost:8001` | Image/query embedding, health checks |
+| Multimodal LM | `http://localhost:8002` | Response generation (OpenAI-compatible vLLM) |
 
 ---
 
@@ -126,7 +127,7 @@ sequenceDiagram
     participant VLM as VLM Service
     participant Qdrant
     participant Supabase
-    participant Claude as Claude Sonnet 4
+    participant MLM as Multimodal LM (Qwen3-VL)
 
     Client->>API: POST /query/
     API->>VLM: POST /embed/query (HTTP)
@@ -134,11 +135,11 @@ sequenceDiagram
     API->>Qdrant: Search (filter: session_id)
     Qdrant-->>API: Matching points
     API->>Supabase: Download images
-    Supabase-->>API: JPEG images
-    API->>Claude: Images + Prompts
+    Supabase-->>API: JPEG images (base64)
+    API->>MLM: POST /v1/chat/completions (images + prompts)
 
     loop Streaming
-        Claude-->>API: Partial response
+        MLM-->>API: Partial response
         API-->>Client: SSE chunk
     end
 ```
@@ -168,27 +169,16 @@ curl -X POST "http://localhost:8000/query/" \
 
 **Content-Type:** `text/event-stream`
 
-The response is streamed as Server-Sent Events (SSE). Each chunk is a JSON object representing the partial `FinalResponse`.
+The response is streamed as Server-Sent Events (SSE). Each chunk contains a `data:` prefix with the text content.
 
-```json
-{"references": [], "answer": "Based on"}
-{"references": [], "answer": "Based on the documents"}
-{"references": [{"id": 1, "title": "Key Findings", "filename": "report.pdf"}], "answer": "Based on the documents, the key findings include..."}
+```
+data: Based on the documents
+data: , the key findings include
+data: ...
+data: [DONE]
 ```
 
-#### Final Response Structure
-
-```json
-{
-  "references": [
-    {
-      "id": 1,
-      "title": "Section Title",
-      "filename": "document.pdf"
-    }
-  ],
-  "answer": "The analysis shows significant improvements [1]."
-}
+The stream terminates with `data: [DONE]\n\n`.
 ```
 
 ---
@@ -299,9 +289,28 @@ Returns detailed model information.
 
 ---
 
+## Multimodal LM Service Endpoints (`:8002`)
+
+The multimodal LM service runs vLLM with an OpenAI-compatible API. It is used internally by the Document API for response generation.
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/v1/chat/completions` | POST | OpenAI-compatible chat completions (with vision) |
+| `/health` | GET | Health check |
+
+### POST /v1/chat/completions
+
+OpenAI-compatible endpoint for multimodal chat completions with vision support. Used by the Document API to send images + prompts for response generation.
+
+### GET /health
+
+Health check endpoint for container orchestration.
+
+---
+
 ## Authentication
 
-Both services support optional JWT authentication via Supabase tokens.
+Both the VLM and Document API services support optional JWT authentication via Supabase tokens.
 
 - **Document API**: `AUTH_ENABLED=true` by default. All endpoints except `/health` require a valid JWT token.
 - **VLM Service**: `AUTH_ENABLED=false` by default. When enabled, `/embed/*` endpoints require authentication. Health endpoints remain unauthenticated for Docker healthchecks.
@@ -414,3 +423,4 @@ asyncio.run(ingest_pdfs())
 Each service has its own interactive documentation:
 - Document API: `http://localhost:8000/docs`
 - VLM Service: `http://localhost:8001/docs`
+- Multimodal LM: `http://localhost:8002/docs`

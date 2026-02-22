@@ -4,6 +4,7 @@
 		docker_up docker_up_detach docker_logs docker_down \
 		docker_runpod_up docker_runpod_up_detach docker_runpod_logs docker_runpod_down \
 		docker_build_vlm docker_push_vlm \
+		docker_build_mlm docker_push_mlm \
 		docker_build_api docker_push_api \
 		docker_build_all docker_push_all
 
@@ -55,10 +56,10 @@ all: pretty mypy clean-all
 # ------------------------------------------------------------------------------
 # Test dependencies locally before Docker rebuild
 test_deps_vlm:
-	cd colpali-vlm && uv sync && uv run python -c "import auto_round, auto_gptq, bitsandbytes; print('✅ All quantization libraries installed')"
+	cd colpali-vlm && uv sync && uv run python -c "import auto_round, auto_gptq, bitsandbytes; print('All quantization libraries installed')"
 
 test_deps_api:
-	cd document-api && uv sync && uv run python -c "import anthropic, qdrant_client; print('✅ All API dependencies installed')"
+	cd document-api && uv sync && uv run python -c "import openai, qdrant_client; print('All API dependencies installed')"
 
 test_deps: test_deps_vlm test_deps_api
 
@@ -66,16 +67,17 @@ test_deps: test_deps_vlm test_deps_api
 dev_vlm:
 	cd colpali-vlm && uv run uvicorn server:app --host 0.0.0.0 --port 8001 --reload
 
-# Start API service (port 8000) - requires VLM service running
+# Start API service (port 8000) - requires VLM and multimodal LM services running
 dev_api:
-	cd document-api && VLM_SERVICE_URL=http://localhost:8001 uv run uvicorn server:app --host 0.0.0.0 --port 8000 --reload
+	cd document-api && VLM_SERVICE_URL=http://localhost:8001 MULTIMODAL_LM_SERVICE_URL=http://localhost:8002 uv run uvicorn server:app --host 0.0.0.0 --port 8000 --reload
 
-# Start both services (run in separate terminals)
+# Start all services (run in separate terminals)
 dev:
 	@echo "Run 'make dev_vlm' in one terminal and 'make dev_api' in another"
+	@echo "Multimodal LM requires GPU. Use: cd multimodal_lm && make docker_build && make docker_run"
 
 # ------------------------------------------------------------------------------
-# Docker Compose (Development - both services)
+# Docker Compose (Development - all services)
 # ------------------------------------------------------------------------------
 docker_up:
 	docker compose up --build
@@ -90,7 +92,7 @@ docker_down:
 	docker compose down
 
 # ------------------------------------------------------------------------------
-# Docker Compose (Cloud - API only, VLM deployed separately)
+# Docker Compose (Cloud - API only, VLM and MLM deployed separately)
 # ------------------------------------------------------------------------------
 docker_runpod_up:
 	docker compose -f docker-compose.runpod.yml up --build
@@ -121,9 +123,25 @@ docker_buildx_vlm_push:
 	cd colpali-vlm &&  docker buildx build --progress=plain -f .\Dockerfile -t $(DOCKERHUB_USERNAME)/colpali-vlm:latest --push .
 
 # ------------------------------------------------------------------------------
+# Docker Build & Push (Multimodal LM Service)
+# ------------------------------------------------------------------------------
+# Build Multimodal LM image
+docker_build_mlm:
+	cd multimodal_lm && docker build -t multimodal-lm:latest .
+
+# Push Multimodal LM image to Docker Hub
+docker_push_mlm:
+	docker tag multimodal-lm:latest $(DOCKERHUB_USERNAME)/multimodal-lm:latest
+	docker push $(DOCKERHUB_USERNAME)/multimodal-lm:latest
+
+# Build Multimodal LM image with Docker Buildx and push to Docker Hub
+docker_buildx_mlm_push:
+	cd multimodal_lm &&  docker buildx build --progress=plain -f .\Dockerfile -t $(DOCKERHUB_USERNAME)/multimodal-lm:latest --push .
+
+# ------------------------------------------------------------------------------
 # Docker Build & Push (Document API)
 # ------------------------------------------------------------------------------
-# Build Document API image	
+# Build Document API image
 docker_build_api:
 	cd document-api && docker build -t document-api:latest .
 
@@ -132,7 +150,7 @@ docker_push_api:
 	docker tag document-api:latest $(DOCKERHUB_USERNAME)/document-api:latest
 	docker push $(DOCKERHUB_USERNAME)/document-api:latest
 
-# Build VLM image with Docker Buildx and push to Docker Hub
+# Build Document API image with Docker Buildx and push to Docker Hub
 docker_buildx_api_push:
 	cd document-api &&  docker buildx build --progress=plain -f .\Dockerfile -t $(DOCKERHUB_USERNAME)/document-api:latest --push .
 
@@ -140,7 +158,7 @@ docker_buildx_api_push:
 # Combined Build & Push
 # ------------------------------------------------------------------------------
 # Build all images
-docker_build_all: docker_build_vlm docker_build_api
+docker_build_all: docker_build_vlm docker_build_mlm docker_build_api
 
 # Push all images to Docker Hub
-docker_push_all: docker_push_vlm docker_push_api
+docker_push_all: docker_push_vlm docker_push_mlm docker_push_api

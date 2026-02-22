@@ -13,7 +13,6 @@ from qdrant_client import AsyncQdrantClient, models
 
 from doc_api.api.auth import get_current_user
 from doc_api.api.dependencies import (
-    get_auth_token,
     get_collection_name,
     get_qdrant_client,
     get_qdrant_semaphore,
@@ -39,7 +38,6 @@ class PDFIngestController:
         collection_name: str,
         qdrant_semaphore: asyncio.Semaphore,
         settings: Settings,
-        auth_token: str | None = None,
     ):
         self.vlm_client = vlm_client
         self.uploader = uploader
@@ -47,7 +45,6 @@ class PDFIngestController:
         self.collection_name = collection_name
         self.qdrant_semaphore = qdrant_semaphore
         self.settings = settings
-        self.auth_token = auth_token
 
     async def ingest(
         self, files: list[UploadFile], session_id: UUID4
@@ -113,7 +110,9 @@ class PDFIngestController:
                         file.filename,
                         self.settings.timeout.pdf_conversion_timeout_seconds,
                     )
-                    results.append({"filename": file.filename, "error": error_msg})
+                    results.append(
+                        {"filename": file.filename, "error": error_msg}
+                    )
                     continue
                 convert_time = time.perf_counter() - convert_start
                 num_images = len(images)
@@ -152,7 +151,7 @@ class PDFIngestController:
                     try:
                         # Call VLM service for embeddings
                         batch_embeddings = await self.vlm_client.embed_images(
-                            batch, auth_token=self.auth_token
+                            batch
                         )
                     except VLMClientError as e:
                         error_msg = f"VLM service error: {str(e)}"
@@ -255,10 +254,11 @@ async def ingest_pdf(
     uploader: Annotated[SupabaseJPEGUploader, Depends(get_supabase_uploader)],
     qdrant_client: Annotated[AsyncQdrantClient, Depends(get_qdrant_client)],
     collection_name: Annotated[str, Depends(get_collection_name)],
-    qdrant_semaphore: Annotated[asyncio.Semaphore, Depends(get_qdrant_semaphore)],
+    qdrant_semaphore: Annotated[
+        asyncio.Semaphore, Depends(get_qdrant_semaphore)
+    ],
     settings: Annotated[Settings, Depends(get_settings_from_state)],
     current_user: Annotated[dict | None, Depends(get_current_user)],
-    auth_token: Annotated[str | None, Depends(get_auth_token)],
 ):
     controller = PDFIngestController(
         vlm_client=vlm_client,
@@ -267,6 +267,5 @@ async def ingest_pdf(
         collection_name=collection_name,
         qdrant_semaphore=qdrant_semaphore,
         settings=settings,
-        auth_token=auth_token,
     )
     return await controller.ingest(files=files, session_id=session_id)

@@ -1,4 +1,4 @@
-# Development docker-compose: runs both VLM and Document API services
+# Development docker-compose: runs VLM, Multimodal LM, and Document API services
 # Usage: docker-compose up --build
 
 services:
@@ -29,6 +29,32 @@ services:
       retries: 5
     restart: unless-stopped
 
+  multimodal_lm:
+    build:
+      context: ./multimodal_lm
+      dockerfile: Dockerfile
+    container_name: multimodal_lm
+    ports:
+      - "8002:8000"
+    env_file:
+      - multimodal_lm/.env
+    volumes:
+      - mlm_hf_cache:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 900s  # 15 minutes for large model download + vLLM startup
+      retries: 5
+    restart: unless-stopped
+
   api:
     build:
       context: ./document-api
@@ -41,6 +67,8 @@ services:
     depends_on:
       vlm:
         condition: service_healthy
+      multimodal_lm:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -51,3 +79,4 @@ services:
 
 volumes:
   vlm_hf_cache:
+  mlm_hf_cache:

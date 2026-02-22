@@ -15,12 +15,13 @@ ColPali is a document retrieval method that leverages Vision Language Models (VL
 You can find more information about this method in the [ColPali paper](https://arxiv.org/abs/2407.01449). They also have a [ColPali repository](https://github.com/illuin-tech/colpali) with the code and models.
 
 ## Description
-This repository contains the backend for a retrieval augmented generation (RAG) application that leverages the ColPali method. The application is split into **two microservices**:
+This repository contains the backend for a retrieval augmented generation (RAG) application that leverages the ColPali method. The application is split into **three microservices**:
 
 1. **colpali-vlm/** - A GPU-based VLM embedding service that handles model inference. Supports multiple models: [ColQwen 2.5](https://huggingface.co/vidore/colqwen2.5-v0.2) (128-dim), ColQwen3 (320-dim), and [TomoroAI ColQwen3](https://huggingface.co/TomoroAI/tomoro-colqwen3-embed-4b) (320-dim).
-2. **document-api/** - A CPU-based API orchestration service that handles PDF ingestion, querying, and response generation. Communicates with the VLM service over HTTP.
+2. **multimodal_lm/** - A GPU-based multimodal LM service running [Qwen3-VL-32B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-32B-Instruct) via [vLLM](https://docs.vllm.ai/) for response generation. Exposes an OpenAI-compatible API.
+3. **document-api/** - A CPU-based API orchestration service that handles PDF ingestion, querying, and response generation. Communicates with the VLM and multimodal LM services over HTTP.
 
-The system uses Qdrant for vector search, Supabase for image storage, and Claude Sonnet 4 for response generation.
+The system uses Qdrant for vector search, Supabase for image storage, and Qwen3-VL-32B-Instruct for response generation.
 
 ### Ingestion
 During the ingestion process, the Document API converts PDFs into JPEGs using **pdf2image**. These images are sent to the VLM service for embedding generation, then uploaded to Supabase storage and indexed in Qdrant.
@@ -28,7 +29,7 @@ During the ingestion process, the Document API converts PDFs into JPEGs using **
 ![ingestion](assets/ingestion.png)
 
 ### Inference
-At inference time, the query is sent to the VLM service for embedding, then Qdrant returns the top-k matching document pages (filtered by session_id). The Document API fetches the corresponding images from Supabase and sends them with the query to Claude Sonnet 4 for response generation.
+At inference time, the query is sent to the VLM service for embedding, then Qdrant returns the top-k matching document pages (filtered by session_id). The Document API fetches the corresponding images from Supabase and sends them with the query to Qwen3-VL-32B-Instruct (via the multimodal LM service) for response generation.
 
 ![inference](assets/inference.png)
 
@@ -48,9 +49,14 @@ At inference time, the query is sent to the VLM service for embedding, then Qdra
 * [transformers](https://huggingface.co/docs/transformers) (TomoroAI)
 * [FastAPI](https://fastapi.tiangolo.com/)
 
+### Multimodal LM Service (`multimodal_lm/`)
+
+* [vLLM](https://docs.vllm.ai/) (OpenAI-compatible inference server)
+* [Qwen3-VL-32B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-32B-Instruct) (multimodal LLM)
+
 ### Document API (`document-api/`)
 * [httpx](https://www.python-httpx.org/) + [tenacity](https://tenacity.readthedocs.io/) (VLM client with retry)
-* [Instructor](https://python.useinstructor.com/) (structured LLM output)
+* [OpenAI Python SDK](https://github.com/openai/openai-python) (multimodal LM client via vLLM)
 * [Qdrant](https://qdrant.tech/) (vector search)
 * [Supabase](https://supabase.com/) (image storage)
 * [FastAPI](https://fastapi.tiangolo.com/)
@@ -78,6 +84,9 @@ cd colpali-rag-app
 # VLM service configuration
 cp colpali-vlm/.env.example colpali-vlm/.env
 
+# Multimodal LM service configuration
+cp multimodal_lm/.env.example multimodal_lm/.env
+
 # Document API configuration
 cp document-api/.env.example document-api/.env
 ```
@@ -102,6 +111,18 @@ PORT=8000
 AUTH_ENABLED=false
 ```
 
+**Multimodal LM service variables (`multimodal_lm/.env`):**
+```bash
+# Model Configuration
+MULTIMODAL_LM_MODEL_NAME=Qwen/Qwen3-VL-32B-Instruct
+MULTIMODAL_LM_MAX_MODEL_LEN=16384
+MULTIMODAL_LM_TENSOR_PARALLEL=1        # Set to 2+ for multi-GPU
+MULTIMODAL_LM_GPU_MEMORY_UTIL=0.90
+
+# Server
+PORT=8000
+```
+
 **Document API variables (`document-api/.env`):**
 ```bash
 # VLM Service Connection (Required)
@@ -120,9 +141,11 @@ SUPABASE_KEY=fillme
 SUPABASE_JWT_SECRET=fillme      # Required if AUTH_ENABLED=true
 BUCKET=colpali
 
-# Anthropic (Required)
-ANTHROPIC_API_KEY=fillme
-DEFAULT_MODEL=claude-sonnet-4-20250514
+# Multimodal LM Service (Required)
+MULTIMODAL_LM_SERVICE_URL=http://localhost:8002
+MULTIMODAL_LM_MODEL_NAME=Qwen/Qwen3-VL-32B-Instruct
+MULTIMODAL_LM_MAX_TOKENS=8192
+MULTIMODAL_LM_TEMPERATURE=0.0
 
 # Optional
 AUTH_ENABLED=true
@@ -133,29 +156,30 @@ INGEST_RATE_LIMIT=10/minute
 
 ## Installation and Usage
 
-There are two ways to run the application: using Docker Compose or running both services locally.
+There are two ways to run the application: using Docker Compose or running the services locally.
 
 ### Using Docker Compose
 
 1. **Ensure Docker is installed on your machine.** For more information, visit the official [Docker documentation](https://docs.docker.com/).
 
-2. **Build and start both services:**
+2. **Build and start all services:**
 
    ```shell
    make docker_up
    ```
-   **Note**: On first startup, the VLM service will download the model (~4GB). Subsequent starts use the cached volume.
+   **Note**: On first startup, the VLM service will download the embedding model (~4GB) and the multimodal LM service will download Qwen3-VL-32B (~60GB). Subsequent starts use the cached volumes.
 
 3. **Access the application docs:**
    - Document API: [http://localhost:8000/docs](http://localhost:8000/docs)
    - VLM Service: [http://localhost:8001/docs](http://localhost:8001/docs)
+   - Multimodal LM Service: [http://localhost:8002/docs](http://localhost:8002/docs)
 
 4. **View logs:**
    ```shell
    make docker_logs
    ```
 
-5. **Stop both services:**
+5. **Stop all services:**
    ```shell
    make docker_down
    ```
@@ -169,7 +193,7 @@ There are two ways to run the application: using Docker Compose or running both 
 sudo apt-get install poppler-utils
 ```
 
-3. **Install dependencies for both services:**
+3. **Install dependencies for the VLM and Document API services:**
 ```shell
 cd colpali-vlm && uv sync && cd ..
 cd document-api && uv sync && cd ..
@@ -180,23 +204,30 @@ cd document-api && uv sync && cd ..
 make dev_vlm    # Runs on port 8001
 ```
 
-5. **Start the Document API (terminal 2):**
+5. **Start the Multimodal LM service (requires GPU):**
 ```shell
-make dev_api    # Runs on port 8000, connects to VLM on 8001
+cd multimodal_lm && make docker_build && make docker_run    # Runs on port 8002
 ```
 
-6. **Access the application:**
+6. **Start the Document API (terminal 2):**
+```shell
+make dev_api    # Runs on port 8000, connects to VLM on 8001 and MLM on 8002
+```
+
+7. **Access the application:**
    - Document API: [http://localhost:8000/docs](http://localhost:8000/docs)
    - VLM Service: [http://localhost:8001/docs](http://localhost:8001/docs)
+   - Multimodal LM Service: [http://localhost:8002/docs](http://localhost:8002/docs)
 
 ## Docker Images
 
 | Service | Dockerfile | Model Loading | Use Case |
 |---------|-----------|---------------|----------|
 | VLM Service | `colpali-vlm/Dockerfile` | Runtime download via entrypoint | All environments (CUDA 12.4, Python 3.11) |
+| Multimodal LM | `multimodal_lm/Dockerfile` | Runtime download via entrypoint | All environments (vLLM + CUDA) |
 | Document API | `document-api/Dockerfile` | N/A (CPU-only, ~500MB) | All environments (Python 3.12) |
 
-The VLM image uses a multi-stage build (CUDA 12.4 + Ubuntu 22.04 + stripped deps) and downloads the model at container startup via `entrypoint.sh`. Models are cached in a Docker volume (`vlm_hf_cache`).
+The VLM image uses a multi-stage build (CUDA 12.4 + Ubuntu 22.04 + stripped deps) and downloads the model at container startup via `entrypoint.sh`. Models are cached in a Docker volume (`vlm_hf_cache`). The multimodal LM image is based on `vllm/vllm-openai:latest` and similarly downloads the model at startup, cached in `mlm_hf_cache`.
 
 ### Cloud Deployment (GPU)
 
@@ -204,8 +235,7 @@ The VLM image uses a multi-stage build (CUDA 12.4 + Ubuntu 22.04 + stripped deps
 ```shell
 export DOCKERHUB_USERNAME=your-username
 docker login
-make docker_build_vlm && make docker_push_vlm
-make docker_build_api && make docker_push_api
+make docker_build_all && make docker_push_all
 ```
 
 2. **Deploy** - See [docs/deployment.md](docs/deployment.md) for detailed instructions.
@@ -248,6 +278,7 @@ The VLM service automatically uses [Flash Attention 2](https://github.com/Dao-AI
 If WSL2 runs out of memory during compilation or model loading, configure `.wslconfig` to allocate more RAM.
 
 ## Structure
+
 ```shell
 colpali-rag-app/
 ├── colpali-vlm/                        # VLM microservice (GPU)
@@ -266,6 +297,12 @@ colpali-rag-app/
 │   ├── entrypoint.sh                   # Downloads model at container start
 │   └── Makefile
 │
+├── multimodal_lm/                      # Multimodal LM microservice (GPU)
+│   ├── Dockerfile                      # vLLM-OpenAI base image
+│   ├── entrypoint.sh                   # Downloads model at container start
+│   ├── Makefile
+│   └── .env.example
+│
 ├── document-api/                       # Document API microservice (CPU)
 │   ├── src/doc_api/
 │   │   ├── api/
@@ -282,8 +319,6 @@ colpali-rag-app/
 │   │   │   ├── vlm_client.py           # HTTP client for VLM service
 │   │   │   ├── img_uploader.py
 │   │   │   └── img_downloader.py
-│   │   ├── models/
-│   │   │   └── query_response.py
 │   │   ├── utils/
 │   │   │   ├── prompt_utils.py
 │   │   │   └── qdrant_utils.py
@@ -297,8 +332,8 @@ colpali-rag-app/
 │       ├── response_1
 │       └── response_2
 │
-├── docker-compose.yml                  # Dev: both services (VLM + API)
-├── docker-compose.runpod.yml           # Cloud: API only (VLM deployed separately)
+├── docker-compose.yml                  # Dev: all services (VLM + MLM + API)
+├── docker-compose.runpod.yml           # Cloud: API only (VLM and MLM deployed separately)
 ├── scripts/
 │   └── get_token.py
 └── Makefile                            # Root-level commands

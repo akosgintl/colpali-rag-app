@@ -1,12 +1,13 @@
 # Configuration
 
-This document describes all configuration options for the ColPali RAG App's two services.
+This document describes all configuration options for the ColPali RAG App's three services.
 
 ## Overview
 
 Each microservice has its own `.env` file and settings classes:
 
 - **VLM Service**: `colpali-vlm/.env` → `colpali-vlm/src/vlm/settings.py`
+- **Multimodal LM Service**: `multimodal_lm/.env` → configured via environment variables in `entrypoint.sh`
 - **Document API**: `document-api/.env` → `document-api/src/doc_api/settings.py`
 
 ---
@@ -113,7 +114,7 @@ graph TD
         QS["QdrantSettings"]
         VS["VLMSettings"]
         SS["SupabaseSettings"]
-        AS["AnthropicSettings"]
+        MLS["MultimodalLMSettings"]
         PS["ProcessingSettings"]
         TS["TimeoutSettings"]
         RLS["RateLimitSettings"]
@@ -128,7 +129,7 @@ graph TD
     QS --> RS
     VS --> RS
     SS --> RS
-    AS --> RS
+    MLS --> RS
     PS --> RS
     TS --> RS
     RLS --> RS
@@ -161,14 +162,14 @@ graph TD
 | `SUPABASE_JWT_SECRET` | `str` | `""` | JWT secret (required if AUTH_ENABLED=true) |
 | `BUCKET` | `str` | `colpali` | Storage bucket name |
 
-### AnthropicSettings
+### MultimodalLMSettings
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `ANTHROPIC_API_KEY` | `str` | `""` | Anthropic API key |
-| `DEFAULT_MODEL` | `str` | `claude-sonnet-4-20250514` | Claude model ID |
-| `MAX_TOKENS` | `int` | `8192` | Maximum response tokens |
-| `TEMPERATURE` | `float` | `0.0` | Model temperature |
+| `MULTIMODAL_LM_SERVICE_URL` | `str` | `http://localhost:8002` | URL of the vLLM service |
+| `MULTIMODAL_LM_MODEL_NAME` | `str` | `Qwen/Qwen3-VL-32B-Instruct` | Model name (must match vLLM) |
+| `MULTIMODAL_LM_MAX_TOKENS` | `int` | `8192` | Maximum response tokens |
+| `MULTIMODAL_LM_TEMPERATURE` | `float` | `0.0` | Model temperature |
 
 ### ProcessingSettings
 
@@ -189,7 +190,7 @@ graph TD
 | **Integration Timeouts** | | | |
 | `QDRANT_TIMEOUT_SECONDS` | `int` | `60` | Qdrant operations timeout |
 | `SUPABASE_TIMEOUT_SECONDS` | `int` | `120` | Supabase operations timeout |
-| `ANTHROPIC_TIMEOUT_SECONDS` | `int` | `180` | Claude API call timeout |
+| `MULTIMODAL_LM_TIMEOUT_SECONDS` | `int` | `180` | Multimodal LM service call timeout |
 | **Processing Timeouts** | | | |
 | `PDF_CONVERSION_TIMEOUT_SECONDS` | `int` | `120` | PDF to image conversion timeout |
 
@@ -215,6 +216,19 @@ graph TD
 | `HOST` | `str` | `0.0.0.0` | Server bind address |
 | `PORT` | `int` | `8000` | Server port |
 
+### Multimodal LM .env.example
+
+```bash
+# Model Configuration
+MULTIMODAL_LM_MODEL_NAME=Qwen/Qwen3-VL-32B-Instruct
+MULTIMODAL_LM_MAX_MODEL_LEN=16384
+MULTIMODAL_LM_TENSOR_PARALLEL=1        # GPU parallelism (1 for single GPU, 2+ for multi-GPU)
+MULTIMODAL_LM_GPU_MEMORY_UTIL=0.90
+
+# Server
+PORT=8000
+```
+
 ### Document API .env.example
 
 ```bash
@@ -234,11 +248,11 @@ SUPABASE_KEY=your-supabase-service-role-key
 SUPABASE_JWT_SECRET=your-jwt-secret
 BUCKET=colpali
 
-# Anthropic (Required)
-ANTHROPIC_API_KEY=sk-ant-your-key
-DEFAULT_MODEL=claude-sonnet-4-20250514
-MAX_TOKENS=8192
-TEMPERATURE=0.0
+# Multimodal LM Service (Required)
+MULTIMODAL_LM_SERVICE_URL=http://localhost:8002
+MULTIMODAL_LM_MODEL_NAME=Qwen/Qwen3-VL-32B-Instruct
+MULTIMODAL_LM_MAX_TOKENS=8192
+MULTIMODAL_LM_TEMPERATURE=0.0
 
 # Authentication
 AUTH_ENABLED=true
@@ -261,7 +275,7 @@ QUERY_ENDPOINT_TIMEOUT_SECONDS=180
 # Integration Timeouts
 QDRANT_TIMEOUT_SECONDS=60
 SUPABASE_TIMEOUT_SECONDS=120
-ANTHROPIC_TIMEOUT_SECONDS=180
+MULTIMODAL_LM_TIMEOUT_SECONDS=180
 PDF_CONVERSION_TIMEOUT_SECONDS=120
 
 # Server

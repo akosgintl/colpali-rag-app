@@ -1,6 +1,6 @@
 import httpx
-from anthropic import AsyncAnthropic
 from loguru import logger
+from openai import AsyncOpenAI
 from qdrant_client import AsyncQdrantClient
 from supabase.client import AsyncClient as SupabaseAsyncClient, AsyncClientOptions
 
@@ -55,19 +55,16 @@ def create_supabase_client(settings: Settings) -> SupabaseAsyncClient:
     )
 
 
-def create_anthropic_client(settings: Settings) -> AsyncAnthropic:
+def create_openai_client(settings: Settings) -> AsyncOpenAI:
     logger.info(
-        "Initializing AsyncAnthropic client | timeout={}s",
-        settings.timeout.anthropic_timeout_seconds,
+        "Initializing AsyncOpenAI client | base_url={} | timeout={}s",
+        settings.multimodal_lm.multimodal_lm_service_url,
+        settings.timeout.multimodal_lm_timeout_seconds,
     )
 
-    # Configure httpx client with timeout for Anthropic API
-    http_client = httpx.AsyncClient(
-        timeout=httpx.Timeout(float(settings.timeout.anthropic_timeout_seconds)),
-        limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
-    )
-
-    return AsyncAnthropic(
-        api_key=settings.anthropic.anthropic_api_key,
-        http_client=http_client,
+    return AsyncOpenAI(
+        base_url=f"{settings.multimodal_lm.multimodal_lm_service_url}/v1",
+        api_key="not-needed",
+        timeout=float(settings.timeout.multimodal_lm_timeout_seconds),
+        max_retries=0,
     )

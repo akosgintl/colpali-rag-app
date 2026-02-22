@@ -1,6 +1,6 @@
 # Data Flow
 
-This document describes the complete data flow through the ColPali RAG App's two-service architecture.
+This document describes the complete data flow through the ColPali RAG App's three-service architecture.
 
 ## Overview
 
@@ -183,7 +183,7 @@ sequenceDiagram
     participant VLM as VLM Service
     participant Qdrant
     participant Supabase
-    participant Claude as Claude Sonnet 4
+    participant MLM as Multimodal LM (Qwen3-VL)
 
     Client->>API: POST /query/
     Note over API: query, top_k, session_id
@@ -203,17 +203,17 @@ sequenceDiagram
 
     rect rgb(240, 255, 240)
         Note over API,Supabase: Image Retrieval
-        API->>Supabase: download_instructor_images()
-        Supabase-->>API: Image[] (base64)
+        API->>Supabase: download_base64_images()
+        Supabase-->>API: list[str] (base64)
     end
 
     rect rgb(255, 240, 255)
-        Note over API,Claude: Response Generation
-        API->>Claude: create_partial()
-        Note over Claude: stream=True
+        Note over API,MLM: Response Generation
+        API->>MLM: POST /v1/chat/completions
+        Note over MLM: stream=True, vision messages
         loop Streaming
-            Claude-->>API: Partial FinalResponse
-            API-->>Client: SSE chunk
+            MLM-->>API: delta.content
+            API-->>Client: SSE chunk (data: text)
         end
     end
 ```

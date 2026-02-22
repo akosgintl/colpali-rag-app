@@ -26,25 +26,17 @@ class TimeoutSettings(BaseSettings):
     inference_timeout_seconds: int = 60
 
 
-class SupabaseSettings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
-
-    supabase_url: str = ""
-    supabase_key: str = ""
-    supabase_jwt_secret: str = ""
-
-
 class AuthSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     auth_enabled: bool = False
+    vlm_api_key: str = ""
 
 
 class Settings(BaseSettings):
     colpali: ColpaliSettings = ColpaliSettings()
     server: ServerSettings = ServerSettings()
     timeout: TimeoutSettings = TimeoutSettings()
-    supabase: SupabaseSettings = SupabaseSettings()
     auth: AuthSettings = AuthSettings()
 
 

@@ -11,7 +11,7 @@ from loguru import logger
 from PIL import Image
 from pydantic import BaseModel
 
-from vlm.api.auth import get_current_user
+from vlm.api.auth import verify_api_key
 from vlm.api.dependencies import (
     get_model,
     get_processor,
@@ -56,7 +56,7 @@ async def embed_images(
     processor: Annotated[Any, Depends(get_processor)],
     semaphore: Annotated[asyncio.Semaphore, Depends(get_semaphore)],
     settings: Annotated[Settings, Depends(get_settings_from_state)],
-    current_user: Annotated[dict | None, Depends(get_current_user)],
+    _api_key_verified: Annotated[None, Depends(verify_api_key)],
 ):
     """
     Generate embeddings for a list of images.
@@ -159,7 +159,7 @@ async def embed_query(
     processor: Annotated[Any, Depends(get_processor)],
     semaphore: Annotated[asyncio.Semaphore, Depends(get_semaphore)],
     settings: Annotated[Settings, Depends(get_settings_from_state)],
-    current_user: Annotated[dict | None, Depends(get_current_user)],
+    _api_key_verified: Annotated[None, Depends(verify_api_key)],
 ):
     """
     Generate embedding for a text query.

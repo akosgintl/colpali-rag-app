@@ -114,11 +114,11 @@ classDiagram
         +bucket: str = "colpali"
     }
 
-    class AnthropicSettings {
-        +anthropic_api_key: str = ""
-        +default_model: str = "claude-sonnet-4-20250514"
-        +max_tokens: int = 8192
-        +temperature: float = 0.0
+    class MultimodalLMSettings {
+        +multimodal_lm_service_url: str = "http://localhost:8002"
+        +multimodal_lm_model_name: str = "Qwen/Qwen3-VL-32B-Instruct"
+        +multimodal_lm_max_tokens: int = 8192
+        +multimodal_lm_temperature: float = 0.0
     }
 
     class ProcessingSettings {
@@ -133,7 +133,7 @@ classDiagram
         +query_endpoint_timeout_seconds: int = 180
         +qdrant_timeout_seconds: int = 60
         +supabase_timeout_seconds: int = 120
-        +anthropic_timeout_seconds: int = 180
+        +multimodal_lm_timeout_seconds: int = 180
         +pdf_conversion_timeout_seconds: int = 120
     }
 
@@ -157,7 +157,7 @@ classDiagram
         +qdrant: QdrantSettings
         +vlm: VLMSettings
         +supabase: SupabaseSettings
-        +anthropic: AnthropicSettings
+        +multimodal_lm: MultimodalLMSettings
         +processing: ProcessingSettings
         +timeout: TimeoutSettings
         +rate_limit: RateLimitSettings
@@ -168,7 +168,7 @@ classDiagram
     Settings *-- QdrantSettings
     Settings *-- VLMSettings
     Settings *-- SupabaseSettings
-    Settings *-- AnthropicSettings
+    Settings *-- MultimodalLMSettings
     Settings *-- ProcessingSettings
     Settings *-- TimeoutSettings
     Settings *-- RateLimitSettings
@@ -203,14 +203,14 @@ classDiagram
 | `SUPABASE_JWT_SECRET` | `str` | `""` | JWT secret (required if AUTH_ENABLED=true) |
 | `BUCKET` | `str` | `colpali` | Storage bucket name |
 
-#### AnthropicSettings
+#### MultimodalLMSettings
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `ANTHROPIC_API_KEY` | `str` | `""` | Anthropic API key |
-| `DEFAULT_MODEL` | `str` | `claude-sonnet-4-20250514` | Claude model ID |
-| `MAX_TOKENS` | `int` | `8192` | Maximum response tokens |
-| `TEMPERATURE` | `float` | `0.0` | Model temperature |
+| `MULTIMODAL_LM_SERVICE_URL` | `str` | `http://localhost:8002` | Multimodal LM service URL |
+| `MULTIMODAL_LM_MODEL_NAME` | `str` | `Qwen/Qwen3-VL-32B-Instruct` | vLLM model name |
+| `MULTIMODAL_LM_MAX_TOKENS` | `int` | `8192` | Maximum response tokens |
+| `MULTIMODAL_LM_TEMPERATURE` | `float` | `0.0` | Model temperature |
 
 #### ProcessingSettings
 
@@ -229,7 +229,7 @@ classDiagram
 | `QUERY_ENDPOINT_TIMEOUT_SECONDS` | `int` | `180` | Query endpoint timeout |
 | `QDRANT_TIMEOUT_SECONDS` | `int` | `60` | Qdrant operations timeout |
 | `SUPABASE_TIMEOUT_SECONDS` | `int` | `120` | Supabase operations timeout |
-| `ANTHROPIC_TIMEOUT_SECONDS` | `int` | `180` | Claude API timeout |
+| `MULTIMODAL_LM_TIMEOUT_SECONDS` | `int` | `180` | Multimodal LM API timeout |
 | `PDF_CONVERSION_TIMEOUT_SECONDS` | `int` | `120` | PDF conversion timeout |
 
 #### RateLimitSettings
